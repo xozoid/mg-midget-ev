@@ -30,6 +30,25 @@ def _interp(xs: list[float], ys: list[float], x: float) -> float:
     return ys[i] + t * (ys[i + 1] - ys[i])
 
 
+def _peak_power_from_curve(rpms: list[float], torques_nm: list[float]) -> float:
+    """Return the peak mechanical power in kW from paired RPM/torque lists.
+
+    Args:
+        rpms: Motor speed breakpoints in revolutions per minute.
+        torques_nm: Torque values in Newton-metres at each breakpoint.
+
+    Returns:
+        Peak power in kilowatts.
+
+    """
+    peak = 0.0
+    for rpm, torque_nm in zip(rpms, torques_nm, strict=True):
+        if rpm > 0:
+            omega = rpm * 2.0 * math.pi / 60.0
+            peak = max(peak, torque_nm * omega / 1000.0)
+    return peak
+
+
 @dataclass
 class Motor:
     """Motor specifications."""
@@ -52,28 +71,34 @@ class Motor:
     peak_pack_current_a: float
     """Peak pack current draw in amps."""
 
-    continuous_power_kw: float
-    """Continuous rated power output in kilowatts."""
-
     max_rpm: float
     """Maximum motor speed in revolutions per minute."""
 
-    torque_curve_rpm: list[float]
-    """RPM breakpoints for the torque and efficiency curves."""
+    peak_curve_rpm: list[float]
+    """RPM breakpoints for the peak torque and efficiency curves."""
 
-    torque_curve_nm: list[float]
-    """Torque in Newton-metres at each RPM breakpoint."""
+    peak_curve_nm: list[float]
+    """Peak torque in Newton-metres at each RPM breakpoint."""
 
-    efficiency_curve_pct: list[float]
-    """Motor efficiency as a percentage at each RPM breakpoint."""
+    peak_efficiency_pct: list[float]
+    """Motor efficiency as a percentage at each peak-curve RPM breakpoint."""
+
+    continuous_curve_rpm: list[float]
+    """RPM breakpoints for the continuous torque and efficiency curves."""
+
+    continuous_curve_nm: list[float]
+    """Continuous torque in Newton-metres at each RPM breakpoint."""
+
+    continuous_efficiency_pct: list[float]
+    """Motor efficiency as a percentage at each continuous-curve RPM breakpoint."""
 
     today_price_usd: float
     """Current sourced price for the motor and controller kit in USD."""
 
     @property
     def peak_torque_nm(self) -> float:
-        """Peak torque in Newton-metres, taken as the maximum on the torque curve."""
-        return max(self.torque_curve_nm)
+        """Peak torque in Newton-metres, taken as the maximum on the peak curve."""
+        return max(self.peak_curve_nm)
 
     @property
     def peak_torque_lbft(self) -> float:
@@ -82,26 +107,24 @@ class Motor:
 
     @property
     def peak_power_kw(self) -> float:
-        """Peak power in kilowatts, derived from the torque curve."""
-        peak = 0.0
-        for rpm, torque_nm in zip(
-            self.torque_curve_rpm,
-            self.torque_curve_nm,
-            strict=True,
-        ):
-            if rpm > 0:
-                omega = rpm * 2.0 * math.pi / 60.0
-                power = torque_nm * omega / 1000.0
-                peak = max(peak, power)
-        return peak
+        """Peak power in kilowatts, derived from the peak torque curve."""
+        return _peak_power_from_curve(self.peak_curve_rpm, self.peak_curve_nm)
+
+    @property
+    def continuous_power_kw(self) -> float:
+        """Continuous power in kilowatts, derived from the continuous torque curve."""
+        return _peak_power_from_curve(
+            self.continuous_curve_rpm,
+            self.continuous_curve_nm,
+        )
 
     @property
     def assumed_cruise_efficiency(self) -> float:
-        """Best motor efficiency from the curve as a fraction (0-1)."""
-        return max(self.efficiency_curve_pct) / 100.0
+        """Best motor efficiency from the continuous curve as a fraction (0-1)."""
+        return max(self.continuous_efficiency_pct) / 100.0
 
     def available_torque_nm(self, rpm: float) -> float:
-        """Available torque at the given RPM by interpolating the torque curve.
+        """Available peak torque at the given RPM, interpolated from the peak curve.
 
         Args:
             rpm: Motor speed in revolutions per minute.
@@ -110,10 +133,22 @@ class Motor:
             Available torque in Newton-metres.
 
         """
-        return _interp(self.torque_curve_rpm, self.torque_curve_nm, rpm)
+        return _interp(self.peak_curve_rpm, self.peak_curve_nm, rpm)
+
+    def continuous_torque_nm(self, rpm: float) -> float:
+        """Continuous torque at the given RPM, interpolated from the continuous curve.
+
+        Args:
+            rpm: Motor speed in revolutions per minute.
+
+        Returns:
+            Continuous torque in Newton-metres.
+
+        """
+        return _interp(self.continuous_curve_rpm, self.continuous_curve_nm, rpm)
 
     def efficiency_at_rpm(self, rpm: float) -> float:
-        """Motor efficiency at the given RPM by interpolating the efficiency curve.
+        """Motor efficiency at the given RPM, interpolated from the peak curve.
 
         Args:
             rpm: Motor speed in revolutions per minute.
@@ -122,20 +157,39 @@ class Motor:
             Motor efficiency as a fraction (0-1).
 
         """
-        return _interp(self.torque_curve_rpm, self.efficiency_curve_pct, rpm) / 100.0
+        return _interp(self.peak_curve_rpm, self.peak_efficiency_pct, rpm) / 100.0
+
+    def continuous_efficiency_at_rpm(self, rpm: float) -> float:
+        """Motor efficiency at the given RPM, interpolated from the continuous curve.
+
+        Args:
+            rpm: Motor speed in revolutions per minute.
+
+        Returns:
+            Motor efficiency as a fraction (0-1).
+
+        """
+        return (
+            _interp(self.continuous_curve_rpm, self.continuous_efficiency_pct, rpm)
+            / 100.0
+        )
 
 
 HYPER9_144V = Motor(
     name="NetGain HyPer 9HV",
+    mass_kg=63.5,
     nominal_voltage_v=144.0,
     min_voltage_v=90.0,
     max_voltage_v=180.0,
     peak_pack_current_a=500.0,
-    mass_kg=63.5,
-    continuous_power_kw=38.0,
-    max_rpm=8000.0,
-    torque_curve_rpm=[0.0, 1200.0, 2400.0, 3600.0, 4800.0, 6000.0, 7200.0],
-    torque_curve_nm=[220.7, 220.5, 220.4, 219.5, 175.3, 137.7, 98.4],
-    efficiency_curve_pct=[0.0, 88.0, 93.1, 94.9, 93.8, 92.3, 91.7],
+    max_rpm=8500.0,
+    # Peak curve: 500 A at 144 V supply
+    peak_curve_rpm=[0.0, 1200.0, 2400.0, 3600.0, 4800.0, 6000.0, 7200.0],
+    peak_curve_nm=[220.7, 220.5, 220.4, 219.5, 175.3, 137.7, 98.4],
+    peak_efficiency_pct=[0.0, 88.0, 93.1, 94.9, 93.8, 92.3, 91.7],
+    # Continuous curve: 250 A at 156 V supply
+    continuous_curve_rpm=[0.0, 1000.0, 2500.0, 4000.0, 5500.0, 7000.0, 8500.0],
+    continuous_curve_nm=[83.9, 83.8, 83.7, 83.5, 74.2, 57.9, 46.5],
+    continuous_efficiency_pct=[0.0, 91.7, 95.4, 96.2, 95.4, 93.6, 91.6],
     today_price_usd=5600.0,
 )
