@@ -231,3 +231,5 @@ HYPER9_144V = Motor(
     continuous_efficiency_pct=[0.0, 91.7, 95.4, 96.2, 95.4, 93.6, 91.6],
     today_price_usd=5600.0,
 )
+
+MOTORS: list[Motor] = [CURTIS_AC50, HYPER9_120V, HYPER9_144V]

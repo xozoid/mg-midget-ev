@@ -149,22 +149,22 @@ class Vehicle:
     name: str = "MG Midget EV"
 
     # Glider = bare rolling car before motor/batteries/EV hardware
-    glider_mass_kg: float = 640.0
+    glider_mass_kg: float = 700.0
     """Mass of the bare rolling chassis before any EV hardware."""
 
     misc_ev_mass_kg: float = 45.0
     """Mass of miscellaneous EV hardware (controller, wiring, charger, etc.)."""
 
-    cd: float = 0.45
+    cd: float = 0.48
     """Drag coefficient."""
 
-    frontal_area_m2: float = 1.60
+    frontal_area_m2: float = 1.67
     """Frontal area in square metres."""
 
-    rolling_resistance: float = 0.012
+    rolling_resistance: float = 0.013
     """Coefficient of rolling resistance."""
 
-    tire_diameter_in: float = 22.0
+    tire_diameter_in: float = 22.1
     """Loaded tire diameter in inches."""
 
     final_drive_ratio: float = 3.90
@@ -182,14 +182,14 @@ class Vehicle:
     regen_recovery_efficiency: float = 0.70
     """Fraction of braking energy recovered through regeneration (0-1)."""
 
-    traction_limit_g: float = 0.65
+    traction_limit_g: float = 0.7
     """Maximum traction-limited acceleration in g."""
 
     gear_ratios: dict[Literal[1, 2, 3, 4], float] = field(
         default_factory=lambda: {
             1: 3.20,
             2: 2.00,
-            3: 1.30,
+            3: 1.378,
             4: 1.00,
         },
     )

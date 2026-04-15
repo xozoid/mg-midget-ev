@@ -61,6 +61,20 @@ EVE_LF100 = CellSpec(
     notes="IMR Batteries pack-of-4 price used",
 )
 
+EVE_LF173 = CellSpec(
+    chemistry="LiFePO4",
+    manufacturer="EVE",
+    model="LF173",
+    nominal_voltage_v=3.2,
+    capacity_ah=173.0,
+    mass_kg=3.19,
+    continuous_c=1.0,
+    peak_c=2.0,
+    max_charge_c=0.5,
+    usable_soc_window=0.85,
+    today_price_usd_per_cell=120,
+)
+
 
 EVE_LF230 = CellSpec(
     chemistry="LiFePO4",
@@ -91,6 +105,60 @@ EVE_LF280K = CellSpec(
     today_price_usd_per_cell=299.99 / 4.0,
     notes="IMR Batteries pack-of-4 price used",
 )
+
+CATL_271 = CellSpec(
+    chemistry="LiFePO4",
+    manufacturer="CATL",
+    model="271Ah",
+    nominal_voltage_v=3.2,
+    capacity_ah=271.0,
+    mass_kg=5.30,  # placeholder mass; confirm from actual supplier
+    continuous_c=1.0,
+    peak_c=3.0,
+    max_charge_c=0.5,
+    usable_soc_window=0.85,
+    today_price_usd_per_cell=217.0,
+    notes="Retail listing price used",
+)
+
+CALB_CA180FI = CellSpec(
+    chemistry="LiFePO4",
+    manufacturer="CALB",
+    model="CA180FI",
+    nominal_voltage_v=3.2,
+    capacity_ah=180.0,
+    mass_kg=5.60,
+    continuous_c=1.0,
+    peak_c=2.0,
+    max_charge_c=0.5,
+    usable_soc_window=0.85,
+    today_price_usd_per_cell=50.0,
+    notes="Battery Hookup 1-cycle surplus benchmark used",
+)
+
+TESLA_S = CellSpec(
+    chemistry="Li-ion",
+    manufacturer="Tesla",
+    model="Model S",
+    nominal_voltage_v=22.8,
+    capacity_ah=232,
+    mass_kg=25,
+    continuous_c=1.0,
+    peak_c=750 / 232,
+    max_charge_c=0.5,
+    usable_soc_window=0.85,
+    today_price_usd_per_cell=1380,
+)
+
+CELLS: list[CellSpec] = [
+    EVE_LF100,
+    EVE_LF173,
+    EVE_LF230,
+    EVE_LF280K,
+    CATL_271,
+    CALB_CA180FI,
+    TESLA_S,
+]
 
 
 @dataclass
