@@ -1,6 +1,8 @@
 # IDE files
 .venv*
 .env*
+prompt*
+.claude
 
 # Build artifacts
 __pycache__

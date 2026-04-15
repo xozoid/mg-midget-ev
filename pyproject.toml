@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mg"
+dynamic = ["version"]
+dependencies = ["colorama"]
+authors = [{ name = "Bradley Davis", email = "me@bradleydavis.tech" }]
+requires-python = ">=3.12"
+
+[project.urls]
+Homepage = "https://github.com/WattsUp/mg-midget-ev"
+Repository = "https://github.com/WattsUp/mg-midget-ev.git"
+Issues = "https://github.com/WattsUp/mg-midget-ev/issues"
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.15.1",
+  "codespell>=2.4.1",
+  "black>=25.9",
+  "isort",
+  "prek",
+  "basedpyright>=1.38.0",
+  "taplo",
+]
+
+[tool.black]
+target-version = ["py312", "py313"]
+preview = true
+
+[tool.codespell]
+skip = "3rd-party,dist,*.pem,*.json"
+
+[tool.isort]
+profile = "black"
+skip_gitignore = true
+float_to_top = true
+force_alphabetical_sort_within_sections = true
+
+[tool.basedpyright]
+include = ["mg"]
+exclude = ["**/__pycache__", "typing"]
+venvPath = "."
+typeCheckingMode = "strict"
+
+reportUnknownParameterType = "warning"
+reportUnknownArgumentType = "warning"
+reportUnknownLambdaType = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownMemberType = "warning"
+reportUnnecessaryTypeIgnoreComment = "warning"
+
+# Checked by ruff
+reportPrivateUsage = "none"
+
+[tool.ruff]
+target-version = "py312"
+exclude = ["typings"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+preview = true
+future-annotations = true
+
+ignore = [
+  "FIX002",  # Permit TODOs
+  "I001",    # mismatch between ruff and isort
+  "PLR0904", # Too many public methods
+  "PLR0911", # Too many return statements
+  "PLR0912", # Too many branches
+  "PLR0913", # Too many arguments
+  "PLR0914", # Too many local variables
+  "PLR0915", # Too many statements
+  "PLR0917", # Too many positional arguments
+  "CPY001",  # No copyright
+  "D104",    # Missing docstring in public package
+  "D203",    # No blank line before pydocs
+  "D213",    # Summary on not on second line
+  "T201",    # Allow print
+]
+
+[tool.ruff.lint.flake8-annotations]
+suppress-dummy-args = true
+
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.ruff]
+strictly-empty-init-modules = true
+
+[tool.setuptools_scm]
+version_file = "mg/version.py"
