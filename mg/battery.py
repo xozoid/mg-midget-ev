@@ -46,20 +46,21 @@ class CellSpec:
     """Free-text source or assumption notes."""
 
 
-EVE_LF280K = CellSpec(
+EVE_LF100 = CellSpec(
     chemistry="LiFePO4",
     manufacturer="EVE",
-    model="LF280K",
+    model="LF100",
     nominal_voltage_v=3.2,
-    capacity_ah=280.0,
-    mass_kg=5.42,  # typical published ballpark; replace with your seller's exact spec
+    capacity_ah=100.0,
+    mass_kg=1.92,
     continuous_c=1.0,
     peak_c=2.0,
     max_charge_c=0.5,
     usable_soc_window=0.85,
-    today_price_usd_per_cell=299.99 / 4.0,
+    today_price_usd_per_cell=189.99 / 4.0,
     notes="IMR Batteries pack-of-4 price used",
 )
+
 
 EVE_LF230 = CellSpec(
     chemistry="LiFePO4",
@@ -76,34 +77,19 @@ EVE_LF230 = CellSpec(
     notes="18650 Battery Store price used",
 )
 
-CATL_271AH = CellSpec(
+EVE_LF280K = CellSpec(
     chemistry="LiFePO4",
-    manufacturer="CATL",
-    model="271Ah",
+    manufacturer="EVE",
+    model="LF280K",
     nominal_voltage_v=3.2,
-    capacity_ah=271.0,
-    mass_kg=5.30,  # placeholder mass; confirm from actual supplier
-    continuous_c=1.0,
-    peak_c=3.0,
-    max_charge_c=0.5,
-    usable_soc_window=0.85,
-    today_price_usd_per_cell=217.0,
-    notes="Retail listing price used",
-)
-
-CALB_CA180FI = CellSpec(
-    chemistry="LiFePO4",
-    manufacturer="CALB",
-    model="CA180FI",
-    nominal_voltage_v=3.2,
-    capacity_ah=180.0,
-    mass_kg=5.60,
+    capacity_ah=280.0,
+    mass_kg=5.42,
     continuous_c=1.0,
     peak_c=2.0,
     max_charge_c=0.5,
     usable_soc_window=0.85,
-    today_price_usd_per_cell=50.0,
-    notes="Battery Hookup 1-cycle surplus benchmark used",
+    today_price_usd_per_cell=299.99 / 4.0,
+    notes="IMR Batteries pack-of-4 price used",
 )
 
 

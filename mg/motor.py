@@ -175,6 +175,44 @@ class Motor:
         )
 
 
+CURTIS_AC50 = Motor(
+    name="HPEVS AC-50 / Curtis 1238-7601 w/ 1238SE-7971",
+    mass_kg=52.0 + 7,
+    nominal_voltage_v=96.0,
+    min_voltage_v=72.0,
+    max_voltage_v=130.0,
+    peak_pack_current_a=650.0,
+    max_rpm=8000.0,
+    # Peak curve: 650 A at 96 V supply (derived from datasheet peaks)
+    peak_curve_rpm=[0.0, 3400.0, 5000.0, 6000, 7000, 8000],
+    peak_curve_nm=[163.4, 148.8, 80, 52, 35, 25.2],
+    peak_efficiency_pct=[0, 87.0, 90.5, 85.6, 83.8, 83.5],
+    continuous_curve_rpm=[1000, 2000, 3000, 4000, 5000, 6000, 7000],
+    continuous_curve_nm=[35, 50, 55, 68, 57, 43, 31],
+    continuous_efficiency_pct=[79.5, 87.2, 89.9, 89.9, 87.5, 85.2, 84.4],
+    today_price_usd=2400.0 + 2200,
+)
+
+
+HYPER9_120V = Motor(
+    name="NetGain HyPer 9",
+    mass_kg=63.5,
+    nominal_voltage_v=120.0,
+    min_voltage_v=72.0,
+    max_voltage_v=132.0,
+    peak_pack_current_a=500.0,
+    max_rpm=8000.0,
+    # Peak curve: 850 A at 120 V supply
+    peak_curve_rpm=[0, 1200, 2400, 3600, 4800, 6000, 7200],
+    peak_curve_nm=[235.1, 235, 234.8, 234.6, 204.5, 161.8, 120.6],
+    peak_efficiency_pct=[0, 87.4, 92.8, 94.8, 94.3, 92.9, 91.9],
+    # Continuous curve: 350 A at 108 V supply
+    continuous_curve_rpm=[0.0, 1000.0, 2500.0, 4000.0, 5500.0, 7000.0, 8500.0],
+    continuous_curve_nm=[88.8, 88.7, 88.5, 88.4, 72.1, 55.8, 44.7],
+    continuous_efficiency_pct=[0.0, 91.7, 95.4, 96.2, 95, 93.1, 91.1],
+    today_price_usd=5400.0,
+)
+
 HYPER9_144V = Motor(
     name="NetGain HyPer 9HV",
     mass_kg=63.5,
@@ -183,7 +221,7 @@ HYPER9_144V = Motor(
     max_voltage_v=180.0,
     peak_pack_current_a=500.0,
     max_rpm=8500.0,
-    # Peak curve: 500 A at 144 V supply
+    # Peak curve: 600 A at 144 V supply
     peak_curve_rpm=[0.0, 1200.0, 2400.0, 3600.0, 4800.0, 6000.0, 7200.0],
     peak_curve_nm=[220.7, 220.5, 220.4, 219.5, 175.3, 137.7, 98.4],
     peak_efficiency_pct=[0.0, 88.0, 93.1, 94.9, 93.8, 92.3, 91.7],

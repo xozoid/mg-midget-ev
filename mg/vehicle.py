@@ -25,6 +25,15 @@ if TYPE_CHECKING:
 
 
 # ------------------------------------------------------------
+# Exceptions
+# ------------------------------------------------------------
+
+
+class OperatingLimitError(ValueError):
+    """Raised when a cruise operating point exceeds a component limit."""
+
+
+# ------------------------------------------------------------
 # Result types
 # ------------------------------------------------------------
 
@@ -46,7 +55,6 @@ class CruiseResult:
     discharge_c: float
     regen_c: float
     range_miles: float
-    warnings: list[str]
 
     def print_summary(self, name: str) -> None:
         """Print a formatted cruise operating-point result.
@@ -69,8 +77,6 @@ class CruiseResult:
             print(f"Estimated range:              {self.range_miles:.1f} miles")
         else:
             print("Estimated range:              effectively unlimited on this descent")
-        for w in self.warnings:
-            print(f"WARNING: {w}")
         print()
 
 
@@ -372,8 +378,12 @@ class Vehicle:
                 ``motor.assumed_cruise_efficiency`` (peak from efficiency curve).
 
         Returns:
-            ``CruiseResult`` with all operating-point values and any limit
-            warnings.
+            ``CruiseResult`` with all operating-point values.
+
+        Raises:
+            OperatingLimitError: If pack discharge current exceeds the pack
+                continuous limit, motor peak current limit, or regen current
+                exceeds the pack maximum charge current.
 
         """
         forces = self.road_load_forces(speed_mph, grade_percent)
@@ -401,22 +411,24 @@ class Vehicle:
         else:
             range_miles = float("inf")
 
-        warnings: list[str] = []
         if pack_current_a > self.battery.continuous_pack_current_a:
-            warnings.append(
+            msg = (
                 f"Discharge current {pack_current_a:.0f} A exceeds pack "
-                f"continuous limit {self.battery.continuous_pack_current_a:.0f} A",
+                f"continuous limit {self.battery.continuous_pack_current_a:.0f} A"
             )
+            raise OperatingLimitError(msg)
         if pack_current_a > self.motor.peak_pack_current_a:
-            warnings.append(
+            msg = (
                 f"Requested current {pack_current_a:.0f} A exceeds motor "
-                f"peak limit {self.motor.peak_pack_current_a:.0f} A",
+                f"peak limit {self.motor.peak_pack_current_a:.0f} A"
             )
+            raise OperatingLimitError(msg)
         if -pack_current_a > self.battery.max_regen_charge_current_a:
-            warnings.append(
+            msg = (
                 f"Regen current {-pack_current_a:.0f} A exceeds pack max "
-                f"charge current {self.battery.max_regen_charge_current_a:.0f} A",
+                f"charge current {self.battery.max_regen_charge_current_a:.0f} A"
             )
+            raise OperatingLimitError(msg)
 
         return CruiseResult(
             speed_mph=speed_mph,
@@ -432,7 +444,6 @@ class Vehicle:
             discharge_c=discharge_c,
             regen_c=regen_c,
             range_miles=range_miles,
-            warnings=warnings,
         )
 
     def gradeability_at_speed(
