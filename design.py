@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 MAX_WEIGHT_LB: float = 2200.0
 MIN_RANGE_MILES: float = 60.0
-MIN_HILL_GRADE_PCT: float = 25.0
-HILL_CHECK_SPEED_MPH: float = 5.0
+MIN_HILL_GRADE_PCT: float = 20.0
+HILL_CHECK_SPEED_MPH: float = 20.0
 CRUISE_SPEED_MPH: float = 35.0
 
 # ---------------------------------------------------------------------------
@@ -44,25 +44,6 @@ def _series_for_motor(motor: Motor, cell_v: float) -> int:
     return round(motor.nominal_voltage_v / cell_v)
 
 
-def _max_grade_at_speed(vehicle: Vehicle, speed_mph: float) -> float:
-    """Return the highest grade achievable at the given speed across all gears.
-
-    Args:
-        vehicle: Vehicle to evaluate.
-        speed_mph: Road speed in miles per hour.
-
-    Returns:
-        Maximum grade in percent that the vehicle can sustain.
-
-    """
-    best = 0.0
-    for gear in (1, 2, 3, 4):
-        result = vehicle.gradeability_at_speed(speed_mph, gear)
-        if result.valid:
-            best = max(best, result.max_grade_percent)
-    return best
-
-
 def _print_table(
     rows: list[tuple[str, str, float, float, float, float, float, bool, str]],
     title: str,
@@ -71,7 +52,7 @@ def _print_table(
 
     Args:
         rows: Each row is (motor_short, config, weight_lb, range_mi,
-            max_grade, total_cost, cell_cost, passed, verdict).
+            hill_range, total_cost, cell_cost, passed, verdict).
         title: Section heading printed above the table.
 
     """
@@ -81,7 +62,7 @@ def _print_table(
         "Pack",
         "Wt (lb)",
         "Range mi",
-        "Grade %",
+        "Hill BatC",
         "Cost $",
         "Cells $",
         "Result",
@@ -99,7 +80,7 @@ def _print_table(
         config,
         weight_lb,
         range_mi,
-        grade,
+        hill_discharge,
         total_cost,
         cell_cost,
         _,
@@ -110,7 +91,7 @@ def _print_table(
             f"{config:<{col[1]}}  "
             f"{weight_lb:>{col[2]}.0f}  "
             f"{range_mi:>{col[3]}.1f}  "
-            f"{grade:>{col[4]}.1f}  "
+            f"{hill_discharge:>{col[4]}.1f}  "
             f"{total_cost:>{col[5]},.0f}  "
             f"{cell_cost:>{col[6]},.0f}  "
             f"{verdict}",
@@ -134,19 +115,23 @@ if __name__ == "__main__":
         weight_lb = vehicle.total_mass_kg * 2.20462
         weight_ok = weight_lb <= MAX_WEIGHT_LB
 
-        max_grade = _max_grade_at_speed(vehicle, HILL_CHECK_SPEED_MPH)
-        hill_ok = max_grade >= MIN_HILL_GRADE_PCT
+        hill_discharge = 0
+        hill_error = ""
+        try:
+            cruise = vehicle.cruise_case(HILL_CHECK_SPEED_MPH, MIN_HILL_GRADE_PCT)
+            hill_discharge = cruise.discharge_c
+        except OperatingLimitError as exc:
+            hill_error = str(exc)
 
         range_miles = 0.0
-        error_msg = ""
+        flat_error = ""
         try:
             cruise = vehicle.cruise_case(CRUISE_SPEED_MPH, 0.0)
             range_miles = cruise.range_miles
         except OperatingLimitError as exc:
             error_msg = str(exc)
-
         range_ok = range_miles >= MIN_RANGE_MILES
-        passed = weight_ok and hill_ok and range_ok and not error_msg
+        passed = weight_ok and not hill_error and range_ok and not flat_error
 
         config = f"{cell.model} {series}s{parallel}p"
         motor_short = motor.name.split("/")[0].strip().split()[-1]
@@ -154,12 +139,12 @@ if __name__ == "__main__":
         fails = []
         if not weight_ok:
             fails.append(f"wt {weight_lb:.0f}lb")
-        if not hill_ok:
-            fails.append(f"hill {max_grade:.0f}%")
-        if not range_ok and not error_msg:
+        if hill_error:
+            fails.append(f"hill: {hill_error}")
+        if not range_ok and not flat_error:
             fails.append(f"range {range_miles:.0f}mi")
-        if error_msg:
-            fails.append(f"limit: {error_msg}")
+        if flat_error:
+            fails.append(f"limit: {flat_error}")
         verdict = "PASS" if passed else ("FAIL (" + ", ".join(fails) + ")")
 
         all_rows.append(
@@ -168,7 +153,7 @@ if __name__ == "__main__":
                 config,
                 weight_lb,
                 range_miles,
-                max_grade,
+                hill_discharge,
                 cost.subtotal_parts_usd(),
                 pack.cell_cost_usd,
                 passed,
