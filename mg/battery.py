@@ -57,8 +57,8 @@ EVE_LF100 = CellSpec(
     peak_c=2.0,
     max_charge_c=0.5,
     usable_soc_window=0.85,
-    today_price_usd_per_cell=189.99 / 4.0,
-    notes="IMR Batteries pack-of-4 price used",
+    today_price_usd_per_cell=33,
+    notes="Docan Energy",
 )
 
 EVE_LF173 = CellSpec(
@@ -157,7 +157,7 @@ CELLS: list[CellSpec] = [
     EVE_LF280K,
     CATL_271,
     CALB_CA180FI,
-    TESLA_S,
+    # TESLA_S,
 ]
 
 

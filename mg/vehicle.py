@@ -346,6 +346,29 @@ class Vehicle:
         """
         return self.wheel_torque_nm(gear, rpm) / self.wheel_radius_m
 
+    def continuous_drive_force_n(
+        self,
+        gear: Literal[1, 2, 3, 4],
+        rpm: float,
+    ) -> float:
+        """Continuous tractive force at the contact patch.
+
+        Args:
+            gear: Gear number (1-4).
+            rpm: Motor speed in revolutions per minute.
+
+        Returns:
+            Continuous drive force in Newtons.
+
+        """
+        wheel_torque_nm = (
+            self.motor.continuous_torque_nm(rpm)
+            * self.gear_ratios[gear]
+            * self.final_drive_ratio
+            * self.driveline_efficiency
+        )
+        return wheel_torque_nm / self.wheel_radius_m
+
     def traction_limited_force_n(self) -> float:
         """Maximum tractive force before wheel slip.
 
