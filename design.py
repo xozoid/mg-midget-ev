@@ -31,12 +31,26 @@ DESIGN_SCORE_TOP_SPEED_MPH: float = 70.0
 DESIGN_SCORE_BATTERY_C_RATE: float = 1.0
 DESIGN_SCORE_COST_SCALE_USD: float = 1000.0
 
+# Fitted from data/glider-test coast-down trials.
+adjusted = True
+TEST_GLIDER_CDA_M2 = 0.94 if adjusted else 1.0821
+TEST_GLIDER_ROLLING_RESISTANCE = 0.018 if adjusted else 0.02021
+TEST_GLIDER_FRONTAL_AREA_M2: float = 1.5
+TEST_GLIDER_CD: float = TEST_GLIDER_CDA_M2 / TEST_GLIDER_FRONTAL_AREA_M2
+
+
 # ---------------------------------------------------------------------------
 # Combinations
 # Each motor entry maps to the series cell count that targets the motor
 # nominal voltage with LFP cells at 3.2 V nominal.
 # ---------------------------------------------------------------------------
 PARALLEL_STRINGS: list[int] = [1, 2]
+FINAL_DRIVE_RATIOS: list[float] = [
+    # 3.55,
+    # 3.70,
+    3.90,
+    # 4.22,
+]
 
 
 @dataclass(frozen=True)
@@ -55,10 +69,12 @@ class DesignRow:
 
     motor_short: str
     drivetrain: str
+    final_drive_ratio: float
     config: str
     weight_lb: float
     range_miles: float
-    max_speed_mph: float
+    redline_top_speed_mph: float
+    flat_max_speed_mph: float
     continuous_hill_discharge_c: float
     total_cost_usd: float
     cell_cost_usd: float
@@ -139,6 +155,22 @@ def _flat_max_speed_mph(vehicle: Vehicle) -> float:
         else:
             high_mph = mid_mph
     return low_mph
+
+
+def _redline_top_speed_mph(vehicle: Vehicle) -> float:
+    """Return the maximum road speed allowed by gearing and motor redline.
+
+    Args:
+        vehicle: Vehicle configuration to evaluate.
+
+    Returns:
+        Road speed in miles per hour at motor redline in the tallest gear.
+
+    """
+    return max(
+        vehicle.speed_mph_at_motor_rpm(vehicle.motor.max_rpm, gear)
+        for gear in vehicle.gear_ratios
+    )
 
 
 def _best_continuous_force_at_speed_n(vehicle: Vehicle, speed_mph: float) -> float:
@@ -241,9 +273,11 @@ def _cruise_discharge_c_unchecked(
     """
     forces = vehicle.road_load_forces(speed_mph, grade_pct)
     p_wheel_kw = wheel_power_kw(forces["total_n"], speed_mph)
-    total_efficiency = (
-        vehicle.driveline_efficiency * vehicle.motor.assumed_cruise_efficiency
+    gear_choice = vehicle.best_continuous_cruise_gear(
+        speed_mph,
+        forces["total_n"],
     )
+    total_efficiency = vehicle.driveline_efficiency * gear_choice.motor_efficiency
     p_batt_kw = (p_wheel_kw / max(total_efficiency, 1e-6)) + (
         vehicle.accessory_power_kw
     )
@@ -254,7 +288,7 @@ def _cruise_discharge_c_unchecked(
 def _design_margin_score(
     *,
     weight_lb: float,
-    max_speed_mph: float,
+    flat_max_speed_mph: float,
     continuous_hill_discharge_c: float,
     total_cost_usd: float,
 ) -> float:
@@ -262,7 +296,7 @@ def _design_margin_score(
 
     Args:
         weight_lb: Vehicle weight in pounds.
-        max_speed_mph: Estimated flat-road maximum speed in miles per hour.
+        flat_max_speed_mph: Estimated flat-road maximum speed in miles per hour.
         continuous_hill_discharge_c: Discharge C-rate at the continuous hill
             check operating point.
         total_cost_usd: Estimated parts cost in US dollars.
@@ -273,7 +307,7 @@ def _design_margin_score(
     """
     weight_margin_pct = ((MAX_WEIGHT_LB - weight_lb) / MAX_WEIGHT_LB) * 100.0
     speed_margin_pct = (
-        (max_speed_mph - DESIGN_SCORE_TOP_SPEED_MPH) / DESIGN_SCORE_TOP_SPEED_MPH
+        (flat_max_speed_mph - DESIGN_SCORE_TOP_SPEED_MPH) / DESIGN_SCORE_TOP_SPEED_MPH
     ) * 100.0
     battery_margin_pct = (
         (DESIGN_SCORE_BATTERY_C_RATE - continuous_hill_discharge_c)
@@ -291,14 +325,16 @@ def _print_table(rows: list[DesignRow], title: str) -> None:
         title: Section heading printed above the table.
 
     """
-    col = [14, 10, 18, 9, 9, 9, 9, 9, 10, 8, 0]
+    col = [14, 10, 4, 18, 9, 9, 9, 9, 9, 9, 10, 8, 0]
     headers = [
         "Motor",
         "Drive",
+        "FD",
         "Pack",
         "Wt (lb)",
         "Range mi",
-        "Max mph",
+        "Top mph",
+        "Flat mph",
         "6% BatC",
         "Cost $",
         "Cells $",
@@ -317,14 +353,16 @@ def _print_table(rows: list[DesignRow], title: str) -> None:
         print(
             f"  {row.motor_short:<{col[0]}}  "
             f"{row.drivetrain:<{col[1]}}  "
-            f"{row.config:<{col[2]}}  "
-            f"{row.weight_lb:>{col[3]}.0f}  "
-            f"{row.range_miles:>{col[4]}.1f}  "
-            f"{row.max_speed_mph:>{col[5]}.1f}  "
-            f"{row.continuous_hill_discharge_c:>{col[6]}.1f}  "
-            f"{row.total_cost_usd:>{col[7]},.0f}  "
-            f"{row.cell_cost_usd:>{col[8]},.0f}  "
-            f"{row.design_margin_score:>{col[9]}.1f}  "
+            f"{row.final_drive_ratio:>{col[2]}.2f}  "
+            f"{row.config:<{col[3]}}  "
+            f"{row.weight_lb:>{col[4]}.0f}  "
+            f"{row.range_miles:>{col[5]}.1f}  "
+            f"{row.redline_top_speed_mph:>{col[6]}.1f}  "
+            f"{row.flat_max_speed_mph:>{col[7]}.1f}  "
+            f"{row.continuous_hill_discharge_c:>{col[8]}.2f}  "
+            f"{row.total_cost_usd:>{col[9]},.0f}  "
+            f"{row.cell_cost_usd:>{col[10]},.0f}  "
+            f"{row.design_margin_score:>{col[11]}.1f}  "
             f"{row.verdict}",
         )
     print(sep)
@@ -333,11 +371,12 @@ def _print_table(rows: list[DesignRow], title: str) -> None:
 if __name__ == "__main__":
     all_rows: list[DesignRow] = []
 
-    for motor, cell, parallel, drivetrain in itertools.product(
+    for motor, cell, parallel, drivetrain, final_drive_ratio in itertools.product(
         MOTORS,
         CELLS,
         PARALLEL_STRINGS,
         DRIVETRAINS,
+        FINAL_DRIVE_RATIOS,
     ):
         series = _series_for_motor(motor, cell.nominal_voltage_v)
         pack = BatteryPack(
@@ -349,21 +388,29 @@ if __name__ == "__main__":
             battery=pack,
             motor=motor,
             glider_mass_kg=Vehicle.glider_mass_kg + drivetrain.glider_mass_delta_kg,
+            cd=TEST_GLIDER_CD,
+            frontal_area_m2=TEST_GLIDER_FRONTAL_AREA_M2,
+            rolling_resistance=TEST_GLIDER_ROLLING_RESISTANCE,
             transmission_efficiency=drivetrain.transmission_efficiency,
             gear_ratios=drivetrain.gear_ratios,
+            final_drive_ratio=final_drive_ratio,
         )
         cost = vehicle.build_cost_model()
 
         weight_lb = vehicle.total_mass_kg * 2.20462
         weight_ok = weight_lb <= MAX_WEIGHT_LB
-        max_speed_mph = _flat_max_speed_mph(vehicle)
-        speed_ok = max_speed_mph >= MIN_MAX_SPEED_MPH
+        redline_top_speed_mph = _redline_top_speed_mph(vehicle)
+        flat_max_speed_mph = _flat_max_speed_mph(vehicle)
+        speed_ok = flat_max_speed_mph >= MIN_MAX_SPEED_MPH
 
-        continuous_hill_discharge_c = _cruise_discharge_c_unchecked(
-            vehicle,
-            CONTINUOUS_HILL_CHECK_SPEED_MPH,
-            CONTINUOUS_HILL_GRADE_PCT,
-        )
+        try:
+            continuous_hill_discharge_c = _cruise_discharge_c_unchecked(
+                vehicle,
+                CONTINUOUS_HILL_CHECK_SPEED_MPH,
+                CONTINUOUS_HILL_GRADE_PCT,
+            )
+        except OperatingLimitError:
+            continuous_hill_discharge_c = float("inf")
         peak_hill_error = ""
         continuous_hill_error = ""
         for hill_speed_mph in PEAK_HILL_CHECK_SPEEDS_MPH:
@@ -414,16 +461,16 @@ if __name__ == "__main__":
         total_cost_usd = cost.subtotal_parts_usd()
         design_margin_score = _design_margin_score(
             weight_lb=weight_lb,
-            max_speed_mph=max_speed_mph,
+            flat_max_speed_mph=flat_max_speed_mph,
             continuous_hill_discharge_c=continuous_hill_discharge_c,
             total_cost_usd=total_cost_usd,
         )
 
-        fails = []
+        fails: list[str] = []
         if not weight_ok:
             fails.append(f"wt {weight_lb:.0f}lb")
         if not speed_ok:
-            fails.append(f"top {max_speed_mph:.0f}mph")
+            fails.append(f"flat {flat_max_speed_mph:.0f}mph")
         if peak_hill_error:
             fails.append(f"20% peak: {peak_hill_error}")
         if continuous_hill_error:
@@ -438,10 +485,12 @@ if __name__ == "__main__":
             DesignRow(
                 motor_short=motor_short,
                 drivetrain=drivetrain.name,
+                final_drive_ratio=final_drive_ratio,
                 config=config,
                 weight_lb=weight_lb,
                 range_miles=range_miles,
-                max_speed_mph=max_speed_mph,
+                redline_top_speed_mph=redline_top_speed_mph,
+                flat_max_speed_mph=flat_max_speed_mph,
                 continuous_hill_discharge_c=continuous_hill_discharge_c,
                 total_cost_usd=total_cost_usd,
                 cell_cost_usd=pack.cell_cost_usd,
@@ -462,7 +511,7 @@ if __name__ == "__main__":
 
     print(
         f"\nCriteria: weight <= {MAX_WEIGHT_LB:.0f} lb | "
-        f"top speed >= {MIN_MAX_SPEED_MPH:.0f} mph | "
+        f"flat speed >= {MIN_MAX_SPEED_MPH:.0f} mph | "
         f"range >= {MIN_RANGE_MILES:.0f} mi @ {CRUISE_SPEED_MPH:.0f} mph | "
         f"peak grade >= {PEAK_HILL_GRADE_PCT:.0f}% @ "
         f"{PEAK_HILL_CHECK_SPEEDS_MPH[0]:.0f}-"
@@ -472,7 +521,7 @@ if __name__ == "__main__":
     )
     print(
         "Score: weight margin % + "
-        f"top-speed margin % above {DESIGN_SCORE_TOP_SPEED_MPH:.0f} mph + "
+        f"flat-speed margin % above {DESIGN_SCORE_TOP_SPEED_MPH:.0f} mph + "
         f"C-rate margin % below {DESIGN_SCORE_BATTERY_C_RATE:.1f} C - "
         f"cost/${DESIGN_SCORE_COST_SCALE_USD:,.0f}",
     )

@@ -24,6 +24,4 @@ test_log.json
 result.json
 *.npz
 
-# Secrets
-*.secret
-data
+coastdown_output

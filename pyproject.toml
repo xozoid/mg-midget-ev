@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mg"
 dynamic = ["version"]
-dependencies = ["colorama"]
+dependencies = ["colorama", "matplotlib", "numpy", "pandas", "scipy"]
 authors = [{ name = "Bradley Davis", email = "me@bradleydavis.tech" }]
 requires-python = ">=3.12"
 
@@ -20,8 +20,10 @@ dev = [
   "codespell>=2.4.1",
   "black>=25.9",
   "isort",
+  "pandas-stubs",
   "prek",
   "basedpyright>=1.38.0",
+  "scipy-stubs",
   "taplo",
 ]
 
@@ -39,7 +41,7 @@ float_to_top = true
 force_alphabetical_sort_within_sections = true
 
 [tool.basedpyright]
-include = ["mg"]
+include = ["mg", "tools"]
 exclude = ["**/__pycache__", "typing"]
 venvPath = "."
 typeCheckingMode = "strict"
@@ -91,3 +93,6 @@ strictly-empty-init-modules = true
 
 [tool.setuptools_scm]
 version_file = "mg/version.py"
+
+[tool.setuptools.packages.find]
+include = ["mg*"]

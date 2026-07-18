@@ -44,6 +44,9 @@ class CruiseResult:
 
     speed_mph: float
     grade_percent: float
+    gear: int
+    motor_rpm: float
+    motor_efficiency: float
     mass_kg: float
     aero_n: float
     rolling_n: float
@@ -66,6 +69,10 @@ class CruiseResult:
         print(f"=== {name.upper()} ===")
         print(f"Speed:                        {self.speed_mph:.1f} mph")
         print(f"Grade:                        {self.grade_percent:.1f} %")
+        print(
+            f"Gear / motor speed:           {self.gear} / {self.motor_rpm:.0f} rpm",
+        )
+        print(f"Motor efficiency:             {self.motor_efficiency * 100.0:.1f} %")
         print(f"Wheel power:                  {self.wheel_power_kw:.2f} kW")
         print(f"Battery power:                {self.battery_power_kw:.2f} kW")
         print(f"Pack current:                 {self.pack_current_a:.1f} A")
@@ -78,6 +85,16 @@ class CruiseResult:
         else:
             print("Estimated range:              effectively unlimited on this descent")
         print()
+
+
+@dataclass
+class CruiseGearChoice:
+    """Gear selected for a steady-state cruise operating point."""
+
+    gear: int
+    motor_rpm: float
+    motor_efficiency: float
+    available_force_n: float
 
 
 @dataclass
@@ -382,6 +399,63 @@ class Vehicle:
     # Simulation
     # ----------------------------------------------------------
 
+    def best_continuous_cruise_gear(
+        self,
+        speed_mph: float,
+        required_force_n: float,
+    ) -> CruiseGearChoice:
+        """Return the most efficient valid gear for a cruise operating point.
+
+        Args:
+            speed_mph: Vehicle speed in miles per hour.
+            required_force_n: Wheel force needed at the contact patch in
+                Newtons.
+
+        Returns:
+            The valid gear with the highest continuous motor efficiency at the
+            corresponding motor RPM.
+
+        Raises:
+            OperatingLimitError: If no gear can operate at the speed and supply
+                the required positive wheel force.
+
+        """
+        traction_limit_n = self.traction_limited_force_n()
+        best_choice: CruiseGearChoice | None = None
+
+        for gear in self.gear_ratios:
+            motor_rpm = self.motor_rpm(speed_mph, gear)
+            if motor_rpm > self.motor.max_rpm:
+                continue
+
+            available_force_n = min(
+                self.continuous_drive_force_n(gear, motor_rpm),
+                traction_limit_n,
+            )
+            if required_force_n > 0.0 and available_force_n < required_force_n:
+                continue
+
+            choice = CruiseGearChoice(
+                gear=gear,
+                motor_rpm=motor_rpm,
+                motor_efficiency=self.motor.continuous_efficiency_at_rpm(motor_rpm),
+                available_force_n=available_force_n,
+            )
+            if (
+                best_choice is None
+                or choice.motor_efficiency > best_choice.motor_efficiency
+            ):
+                best_choice = choice
+
+        if best_choice is None:
+            msg = (
+                f"No gear can sustain {required_force_n:.0f} N at "
+                f"{speed_mph:.1f} mph continuously"
+            )
+            raise OperatingLimitError(msg)
+
+        return best_choice
+
     def cruise_case(
         self,
         speed_mph: float,
@@ -398,31 +472,39 @@ class Vehicle:
             speed_mph: Vehicle speed in miles per hour.
             grade_percent: Road grade as a percentage (positive = uphill).
             motor_efficiency: Motor efficiency override (0-1). Defaults to
-                ``motor.assumed_cruise_efficiency`` (peak from efficiency curve).
+                the continuous efficiency at the RPM of the most efficient
+                valid gear.
 
         Returns:
             ``CruiseResult`` with all operating-point values.
 
         Raises:
-            OperatingLimitError: If pack discharge current exceeds the pack
-                continuous limit, motor peak current limit, or regen current
-                exceeds the pack maximum charge current.
+            OperatingLimitError: If no gear can sustain the operating point,
+                pack discharge current exceeds the pack continuous limit, motor
+                peak current limit, or regen current exceeds the pack maximum
+                charge current.
 
         """
         forces = self.road_load_forces(speed_mph, grade_percent)
         p_wheel_kw = forces["total_n"] * mph_to_mps(speed_mph) / 1000.0
 
-        eff = (
+        gear_choice = self.best_continuous_cruise_gear(
+            speed_mph,
+            forces["total_n"],
+        )
+        motor_efficiency_value = (
             motor_efficiency
             if motor_efficiency is not None
-            else self.motor.assumed_cruise_efficiency
+            else gear_choice.motor_efficiency
         )
-        total_eff = self.driveline_efficiency * eff
+        total_eff = self.driveline_efficiency * motor_efficiency_value
 
         if p_wheel_kw >= 0:
             p_batt_kw = (p_wheel_kw / max(total_eff, 1e-6)) + self.accessory_power_kw
         else:
-            regen_kw = (-p_wheel_kw) * self.regen_recovery_efficiency * eff
+            regen_kw = (
+                (-p_wheel_kw) * self.regen_recovery_efficiency * motor_efficiency_value
+            )
             p_batt_kw = self.accessory_power_kw - regen_kw
 
         pack_current_a = (p_batt_kw * 1000.0) / self.battery.nominal_voltage_v
@@ -456,6 +538,9 @@ class Vehicle:
         return CruiseResult(
             speed_mph=speed_mph,
             grade_percent=grade_percent,
+            gear=gear_choice.gear,
+            motor_rpm=gear_choice.motor_rpm,
+            motor_efficiency=motor_efficiency_value,
             mass_kg=self.total_mass_kg,
             aero_n=forces["aero_n"],
             rolling_n=forces["rolling_n"],
