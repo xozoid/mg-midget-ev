@@ -18,7 +18,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Criteria
 # ---------------------------------------------------------------------------
-MAX_WEIGHT_LB: float = 2200.0
+MAX_WEIGHT_LB: float = 2000.0
+DESIGN_SCORE_TARGET_WEIGHT_LB: float = 1900.0
 MIN_RANGE_MILES: float = 60.0
 MIN_MAX_SPEED_MPH: float = 60.0
 PEAK_HILL_GRADE_PCT: float = 20.0
@@ -29,7 +30,8 @@ CRUISE_SPEED_MPH: float = 35.0
 TRANSMISSION_MASS_KG: float = 30.0
 DESIGN_SCORE_TOP_SPEED_MPH: float = 70.0
 DESIGN_SCORE_BATTERY_C_RATE: float = 1.0
-DESIGN_SCORE_COST_SCALE_USD: float = 1000.0
+DESIGN_SCORE_MAX_C_RATE_POINTS: float = 30.0
+DESIGN_SCORE_COST_SCALE_USD: float = 500.0
 
 # Fitted from data/glider-test coast-down trials.
 adjusted = True
@@ -71,6 +73,12 @@ class DesignRow:
     drivetrain: str
     final_drive_ratio: float
     config: str
+    front_battery_box_mass_kg: float
+    rear_battery_box_mass_kg: float
+    front_battery_cell_count: int
+    rear_battery_cell_count: int
+    target_front_weight_fraction: float
+    front_weight_fraction_with_cargo: float
     weight_lb: float
     range_miles: float
     redline_top_speed_mph: float
@@ -85,19 +93,8 @@ class DesignRow:
 
 DRIVETRAINS: list[Drivetrain] = [
     Drivetrain(
-        name="4-speed",
-        glider_mass_delta_kg=0.0,
-        transmission_efficiency=0.95,
-        gear_ratios={
-            1: 3.513,
-            2: 2.170,
-            3: 1.378,
-            4: 1.00,
-        },
-    ),
-    Drivetrain(
         name="direct",
-        glider_mass_delta_kg=-TRANSMISSION_MASS_KG,
+        glider_mass_delta_kg=0,
         transmission_efficiency=0.99,
         gear_ratios={1: 1.0},
     ),
@@ -305,16 +302,20 @@ def _design_margin_score(
         Dimensionless score. Higher is better.
 
     """
-    weight_margin_pct = ((MAX_WEIGHT_LB - weight_lb) / MAX_WEIGHT_LB) * 100.0
+    weight_margin_pct = (
+        (DESIGN_SCORE_TARGET_WEIGHT_LB - weight_lb) / DESIGN_SCORE_TARGET_WEIGHT_LB
+    ) * 100.0
     speed_margin_pct = (
         (flat_max_speed_mph - DESIGN_SCORE_TOP_SPEED_MPH) / DESIGN_SCORE_TOP_SPEED_MPH
     ) * 100.0
-    battery_margin_pct = (
+    c_rate_score = (
         (DESIGN_SCORE_BATTERY_C_RATE - continuous_hill_discharge_c)
         / DESIGN_SCORE_BATTERY_C_RATE
     ) * 100.0
+    # NOTE: Cap the C-rate contribution so rates at or below 0.70 C are equal.
+    c_rate_score = min(c_rate_score, DESIGN_SCORE_MAX_C_RATE_POINTS)
     cost_penalty = total_cost_usd / DESIGN_SCORE_COST_SCALE_USD
-    return weight_margin_pct + speed_margin_pct + battery_margin_pct - cost_penalty
+    return weight_margin_pct + speed_margin_pct + c_rate_score - cost_penalty
 
 
 def _print_table(rows: list[DesignRow], title: str) -> None:
@@ -368,6 +369,53 @@ def _print_table(rows: list[DesignRow], title: str) -> None:
     print(sep)
 
 
+def _print_battery_box_table(rows: list[DesignRow]) -> None:
+    """Print battery-box masses for the highest-ranked designs.
+
+    Args:
+        rows: Highest-ranked passing design rows to print.
+
+    """
+    target_front_pct = rows[0].target_front_weight_fraction * 100.0
+    target_rear_pct = 100.0 - target_front_pct
+    col = [14, 18, 10, 10, 11, 11, 14, 8]
+    headers = [
+        "Motor",
+        "Pack",
+        "Front kg",
+        "Rear kg",
+        "Front cells",
+        "Rear cells",
+        "Balance w/cargo",
+        "Score",
+    ]
+    header_line = "  ".join(
+        h.ljust(w) if w else h for h, w in zip(headers, col, strict=True)
+    )
+    sep = "-" * max(len(header_line), 60)
+    print(
+        f"\n=== TOP DESIGNS - BATTERY BOX MASSES "
+        f"(TARGET {target_front_pct:.1f}/{target_rear_pct:.1f} F/R WITHOUT CARGO) ===",
+    )
+    print(sep)
+    print(header_line)
+    print(sep)
+    for row in rows:
+        front_pct = row.front_weight_fraction_with_cargo * 100.0
+        balance = f"{front_pct:.1f}/{100.0 - front_pct:.1f} F/R"
+        print(
+            f"  {row.motor_short:<{col[0]}}  "
+            f"{row.config:<{col[1]}}  "
+            f"{row.front_battery_box_mass_kg:>{col[2]}.1f}  "
+            f"{row.rear_battery_box_mass_kg:>{col[3]}.1f}  "
+            f"{row.front_battery_cell_count:>{col[4]}}  "
+            f"{row.rear_battery_cell_count:>{col[5]}}  "
+            f"{balance:>{col[6]}}  "
+            f"{row.design_margin_score:>{col[7]}.1f}",
+        )
+    print(sep)
+
+
 if __name__ == "__main__":
     all_rows: list[DesignRow] = []
 
@@ -397,7 +445,7 @@ if __name__ == "__main__":
         )
         cost = vehicle.build_cost_model()
 
-        weight_lb = vehicle.total_mass_kg * 2.20462
+        weight_lb = vehicle.curb_mass_kg * 2.20462
         weight_ok = weight_lb <= MAX_WEIGHT_LB
         redline_top_speed_mph = _redline_top_speed_mph(vehicle)
         flat_max_speed_mph = _flat_max_speed_mph(vehicle)
@@ -487,6 +535,12 @@ if __name__ == "__main__":
                 drivetrain=drivetrain.name,
                 final_drive_ratio=final_drive_ratio,
                 config=config,
+                front_battery_box_mass_kg=vehicle.front_battery_box_mass_kg,
+                rear_battery_box_mass_kg=vehicle.rear_battery_box_mass_kg,
+                front_battery_cell_count=vehicle.front_battery_cell_count,
+                rear_battery_cell_count=vehicle.rear_battery_cell_count,
+                target_front_weight_fraction=vehicle.target_front_weight_fraction,
+                front_weight_fraction_with_cargo=vehicle.front_weight_fraction,
                 weight_lb=weight_lb,
                 range_miles=range_miles,
                 redline_top_speed_mph=redline_top_speed_mph,
@@ -506,11 +560,12 @@ if __name__ == "__main__":
     passing.sort(key=operator.attrgetter("design_margin_score"), reverse=True)
     if passing:
         _print_table(passing, "=== PASSING - RANKED BY DESIGN MARGIN SCORE ===")
+        _print_battery_box_table(passing[:3])
     else:
         print("\nNo combinations passed all criteria.")
 
     print(
-        f"\nCriteria: weight <= {MAX_WEIGHT_LB:.0f} lb | "
+        f"\nCriteria: curb weight <= {MAX_WEIGHT_LB:.0f} lb | "
         f"flat speed >= {MIN_MAX_SPEED_MPH:.0f} mph | "
         f"range >= {MIN_RANGE_MILES:.0f} mi @ {CRUISE_SPEED_MPH:.0f} mph | "
         f"peak grade >= {PEAK_HILL_GRADE_PCT:.0f}% @ "
@@ -520,8 +575,8 @@ if __name__ == "__main__":
         f"{CONTINUOUS_HILL_CHECK_SPEED_MPH:.0f} mph",
     )
     print(
-        "Score: weight margin % + "
+        f"Score: weight margin % below {DESIGN_SCORE_TARGET_WEIGHT_LB:.0f} lb + "
         f"flat-speed margin % above {DESIGN_SCORE_TOP_SPEED_MPH:.0f} mph + "
-        f"C-rate margin % below {DESIGN_SCORE_BATTERY_C_RATE:.1f} C - "
+        f"C-rate score (max {DESIGN_SCORE_MAX_C_RATE_POINTS:.0f} points) - "
         f"cost/${DESIGN_SCORE_COST_SCALE_USD:,.0f}",
     )

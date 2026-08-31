@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import ClassVar, TYPE_CHECKING
 
 from mg.cost import ConversionCostModel
 from mg.utils import (
@@ -163,11 +163,26 @@ class Vehicle:
     battery: BatteryPack
     motor: Motor
 
+    # Static weight-distribution measurements and installation geometry.
+    GLIDER_FRONT_WEIGHT_FRACTION: ClassVar[float] = 0.438
+    CARGO_FRONT_WEIGHT_FRACTION: ClassVar[float] = 0.362
+    MOTOR_FRONT_WEIGHT_FRACTION: ClassVar[float] = 0.694
+    MISC_EV_FRONT_WEIGHT_FRACTION: ClassVar[float] = 0.5
+    FRONT_BATTERY_BOX_FRONT_WEIGHT_FRACTION: ClassVar[float] = 1.0
+    REAR_BATTERY_BOX_FRONT_WEIGHT_FRACTION: ClassVar[float] = -12 / 72
+
     name: str = "MG Midget EV"
 
     # Glider = bare rolling car before motor/batteries/EV hardware
-    glider_mass_kg: float = 700.0
+    # As measured
+    glider_mass_kg: float = 498.0
     """Mass of the bare rolling chassis before any EV hardware."""
+
+    cargo_mass_kg: float = 200.0
+    """Mass of passengers, cargo, etc."""
+
+    target_front_weight_fraction: float = 0.5
+    """Target fraction of total mass carried by the front axle."""
 
     misc_ev_mass_kg: float = 45.0
     """Mass of miscellaneous EV hardware (controller, wiring, charger, etc.)."""
@@ -217,14 +232,108 @@ class Vehicle:
     # ----------------------------------------------------------
 
     @property
-    def total_mass_kg(self) -> float:
-        """Total vehicle mass including battery pack in kilograms."""
+    def curb_mass_kg(self) -> float:
+        """Curb vehicle mass including battery pack in kilograms."""
         return (
             self.glider_mass_kg
             + self.motor.mass_kg
             + self.misc_ev_mass_kg
             + self.battery.total_pack_mass_kg
         )
+
+    @property
+    def total_mass_kg(self) -> float:
+        """Total vehicle mass including cargo."""
+        return self.curb_mass_kg + self.cargo_mass_kg
+
+    @property
+    def mass_without_battery_kg(self) -> float:
+        """Total vehicle mass excluding the battery pack."""
+        return (
+            self.glider_mass_kg
+            + self.motor.mass_kg
+            + self.misc_ev_mass_kg
+            + self.cargo_mass_kg
+        )
+
+    @property
+    def front_axle_mass_without_battery_kg(self) -> float:
+        """Front-axle load excluding the battery pack."""
+        return (
+            self.glider_mass_kg * self.GLIDER_FRONT_WEIGHT_FRACTION
+            + self.cargo_mass_kg * self.CARGO_FRONT_WEIGHT_FRACTION
+            + self.motor.mass_kg * self.MOTOR_FRONT_WEIGHT_FRACTION
+            + self.misc_ev_mass_kg * self.MISC_EV_FRONT_WEIGHT_FRACTION
+        )
+
+    @property
+    def front_axle_mass_without_battery_or_cargo_kg(self) -> float:
+        """Front-axle load excluding the battery pack and cargo."""
+        return (
+            self.glider_mass_kg * self.GLIDER_FRONT_WEIGHT_FRACTION
+            + self.motor.mass_kg * self.MOTOR_FRONT_WEIGHT_FRACTION
+            + self.misc_ev_mass_kg * self.MISC_EV_FRONT_WEIGHT_FRACTION
+        )
+
+    @property
+    def rear_battery_box_mass_kg(self) -> float:
+        """Battery-box mass required at the rear location for the target balance.
+
+        A negative result means the target balance cannot be reached with the
+        available battery mass, even when all of it is placed in the front box.
+        """
+        # NOTE: Do not clamp negative results; they identify an infeasible target.
+        battery_mass_kg = self.battery.total_pack_mass_kg
+        target_front_mass_kg = self.target_front_weight_fraction * self.curb_mass_kg
+        front_mass_without_battery_kg = self.front_axle_mass_without_battery_or_cargo_kg
+        return (
+            front_mass_without_battery_kg
+            + battery_mass_kg * self.FRONT_BATTERY_BOX_FRONT_WEIGHT_FRACTION
+            - target_front_mass_kg
+        ) / (
+            self.FRONT_BATTERY_BOX_FRONT_WEIGHT_FRACTION
+            - self.REAR_BATTERY_BOX_FRONT_WEIGHT_FRACTION
+        )
+
+    @property
+    def front_battery_box_mass_kg(self) -> float:
+        """Battery-box mass required at the front location for the target balance."""
+        return self.battery.total_pack_mass_kg - self.rear_battery_box_mass_kg
+
+    @property
+    def front_battery_cell_count(self) -> int:
+        """Estimated whole-cell count for the front battery box."""
+        front_cell_fraction = (
+            self.front_battery_box_mass_kg / self.battery.total_pack_mass_kg
+        )
+        return round(self.battery.cell_count * front_cell_fraction)
+
+    @property
+    def rear_battery_cell_count(self) -> int:
+        """Estimated whole-cell count for the rear battery box."""
+        return self.battery.cell_count - self.front_battery_cell_count
+
+    @property
+    def front_axle_mass_kg(self) -> float:
+        """Total mass carried by the front axle at the target box balance."""
+        return (
+            self.front_axle_mass_without_battery_or_cargo_kg
+            + self.cargo_mass_kg * self.CARGO_FRONT_WEIGHT_FRACTION
+            + self.front_battery_box_mass_kg
+            * self.FRONT_BATTERY_BOX_FRONT_WEIGHT_FRACTION
+            + self.rear_battery_box_mass_kg
+            * self.REAR_BATTERY_BOX_FRONT_WEIGHT_FRACTION
+        )
+
+    @property
+    def rear_axle_mass_kg(self) -> float:
+        """Total mass carried by the rear axle at the target box balance."""
+        return self.total_mass_kg - self.front_axle_mass_kg
+
+    @property
+    def front_weight_fraction(self) -> float:
+        """Fraction of total vehicle mass carried by the front axle with cargo."""
+        return self.front_axle_mass_kg / self.total_mass_kg
 
     @property
     def wheel_radius_m(self) -> float:
@@ -686,15 +795,23 @@ class Vehicle:
     def print_summary(self) -> None:
         """Print a formatted summary of the vehicle and motor."""
         motor = self.motor
-        total_mass = self.total_mass_kg
+        curb_mass = self.curb_mass_kg
         print("=== VEHICLE / MOTOR SUMMARY ===")
         print(f"Vehicle:                      {self.name}")
         print(f"Glider mass:                  {self.glider_mass_kg:.1f} kg")
         print(f"Motor mass:                   {self.motor.mass_kg:.1f} kg")
         print(f"Battery pack mass:            {self.battery.total_pack_mass_kg:.1f} kg")
+        print(
+            f"Battery boxes F/R:            {self.front_battery_box_mass_kg:.1f} / "
+            f"{self.rear_battery_box_mass_kg:.1f} kg",
+        )
         print(f"Misc EV hardware mass:        {self.misc_ev_mass_kg:.1f} kg")
-        print(f"Total vehicle mass:           {total_mass:.1f} kg")
-        print(f"Total vehicle mass:           {total_mass * 2.20462:.0f} lb")
+        print(f"Total curb mass:              {curb_mass:.1f} kg")
+        print(f"Total curb mass:              {curb_mass * 2.20462:.0f} lb")
+        print(
+            f"Weight distribution F/R:      {self.front_weight_fraction * 100.0:.1f} / "
+            f"{(1.0 - self.front_weight_fraction) * 100.0:.1f} %",
+        )
         print(f"Motor:                        {motor.name}")
         print(f"Motor price:                  ${motor.today_price_usd:,.0f}")
         print(
