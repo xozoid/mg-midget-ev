@@ -77,8 +77,12 @@ class Geometry(NamedTuple):
     wheel_radius_in: float = 22.1 / 2
 
     tie_rod_inward_in: float = 1
-    tie_rod_up_in: float = 3
+    tie_rod_up_in: float = -3
     tie_rod_forward_in: float = 8
+
+    tie_rod_link_in: float = 8
+    steering_rod_y_in: float = -8
+    steering_rod_z_in: float = 3
 
     @property
     def caster_cos(self) -> float:
@@ -311,6 +315,35 @@ class Geometry(NamedTuple):
             -self.tie_rod_inward_in * wheel_outward_unit_z
             + self.tie_rod_up_in * upright_unit_z
             + self.tie_rod_forward_in * wheel_forward_unit_z,
+        )
+
+    def steering_rod_link_point(
+        self,
+        lower_angle_rad: float,
+        toe_angle_rad: float,
+    ) -> Point:
+        """Return the tie-rod link point on the positive-x steering rod.
+
+        The steering rod is parallel to the x axis at fixed longitudinal and
+        vertical coordinates. The returned point is the inboard endpoint of the
+        fixed-length tie-rod link.
+
+        Returns:
+            The steering-rod link point in inches.
+
+        """
+        tie_rod_point = self.tie_rod_point(lower_angle_rad, toe_angle_rad)
+        steering_rod_link_point_x_in = tie_rod_point.x - float(
+            np.sqrt(
+                self.tie_rod_link_in**2
+                - (tie_rod_point.y - self.steering_rod_y_in) ** 2
+                - (tie_rod_point.z - self.steering_rod_z_in) ** 2,
+            ),
+        )
+        return Point(
+            steering_rod_link_point_x_in,
+            self.steering_rod_y_in,
+            self.steering_rod_z_in,
         )
 
     def instant_center(self, lower_angle_rad: float) -> Point:

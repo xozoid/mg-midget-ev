@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Ellipse
+from scipy.optimize import root_scalar
 
 from mg.front_suspension import Geometry
 
@@ -20,6 +21,8 @@ def plot_xz(
     geometry: Geometry,
     lower_angles_rad: Sequence[float],
     toe_angles_rad: Sequence[float],
+    toe_angles_right_turn_rad: Sequence[float],
+    toe_angles_left_turn_rad: Sequence[float],
     lower_angle_max_bump_rad: float,
     toe_angle_max_bump_rad: float,
     lower_angle_rest_rad: float,
@@ -35,6 +38,8 @@ def plot_xz(
         geometry: Fixed dimensions for the modeled suspension side.
         lower_angles_rad: Sweep of lower control-arm angles in radians.
         toe_angles_rad: Toe angles corresponding to ``lower_angles_rad``.
+        toe_angles_right_turn_rad: Toe angles with a +5 degree right turn at rest.
+        toe_angles_left_turn_rad: Toe angles with a -5 degree left turn at rest.
         lower_angle_max_bump_rad: Lower control-arm angle at maximum bump.
         toe_angle_max_bump_rad: Toe angle at maximum bump.
         lower_angle_rest_rad: Lower control-arm rest angle in radians.
@@ -95,6 +100,12 @@ def plot_xz(
             zip(lower_angles_rad, toe_angles_rad, strict=True),
         ),
     )
+    steering_rod_link_points = list(
+        starmap(
+            geometry.steering_rod_link_point,
+            zip(lower_angles_rad, toe_angles_rad, strict=True),
+        ),
+    )
     ride_heights_in = [
         -wheel_contact_point.z for wheel_contact_point in wheel_contact_points
     ]
@@ -117,6 +128,7 @@ def plot_xz(
         ("Upper trunnion", upper_trunnion_points, "tab:red"),
         ("Wheel contact", wheel_contact_points, "tab:purple"),
         ("Tie-rod point", tie_rod_points, "tab:brown"),
+        ("Steering-rod link point", steering_rod_link_points, "tab:cyan"),
     )
     for point_name, geometry_point_path, path_color in geometry_point_paths:
         axis_geometry.plot(
@@ -169,6 +181,40 @@ def plot_xz(
         label="Tie-rod point path",
         zorder=1,
     )
+    axis_geometry_yz.plot(
+        [
+            steering_rod_link_point.y
+            for steering_rod_link_point in steering_rod_link_points
+        ],
+        [
+            steering_rod_link_point.z
+            for steering_rod_link_point in steering_rod_link_points
+        ],
+        color="tab:cyan",
+        linestyle=":",
+        linewidth=2.0,
+        label="Steering-rod link point path",
+        zorder=1,
+    )
+    axis_geometry_contact_yz.plot(
+        [
+            steering_rod_link_point.y
+            for steering_rod_link_point in steering_rod_link_points
+        ],
+        [
+            steering_rod_link_point.z - wheel_contact_point.z
+            for steering_rod_link_point, wheel_contact_point in zip(
+                steering_rod_link_points,
+                wheel_contact_points,
+                strict=True,
+            )
+        ],
+        color="tab:cyan",
+        linestyle=":",
+        linewidth=2.0,
+        label="Steering-rod link point path",
+        zorder=1,
+    )
 
     state_angles = (
         (
@@ -204,6 +250,10 @@ def plot_xz(
         wheel_contact_point = geometry.wheel_contact(lower_angle_rad, toe_angle_rad)
         roll_center_point = geometry.roll_center(lower_angle_rad, toe_angle_rad)
         tie_rod_point = geometry.tie_rod_point(lower_angle_rad, toe_angle_rad)
+        steering_rod_link_point = geometry.steering_rod_link_point(
+            lower_angle_rad,
+            toe_angle_rad,
+        )
         four_bar_points = (
             lower_pickup_point,
             upper_pickup_point,
@@ -254,6 +304,13 @@ def plot_xz(
             [tie_rod_point.z],
             color=state_color,
             marker="D",
+            zorder=3,
+        )
+        axis_geometry.scatter(
+            [steering_rod_link_point.x],
+            [steering_rod_link_point.z],
+            color=state_color,
+            marker="X",
             zorder=3,
         )
         axis_geometry.plot(
@@ -336,6 +393,13 @@ def plot_xz(
             marker="D",
             zorder=3,
         )
+        axis_geometry_contact.scatter(
+            [steering_rod_link_point.x],
+            [steering_rod_link_point.z - wheel_contact_point.z],
+            color=state_color,
+            marker="X",
+            zorder=3,
+        )
         axis_geometry_contact.plot(
             [instant_center_point.x, lower_trunnion_point.x],
             [
@@ -413,6 +477,13 @@ def plot_xz(
             marker="D",
             zorder=3,
         )
+        axis_geometry_yz.scatter(
+            [steering_rod_link_point.y],
+            [steering_rod_link_point.z],
+            color=state_color,
+            marker="X",
+            zorder=3,
+        )
         axis_geometry_contact_yz.add_patch(
             Ellipse(
                 (
@@ -445,6 +516,13 @@ def plot_xz(
             marker="D",
             zorder=3,
         )
+        axis_geometry_contact_yz.scatter(
+            [steering_rod_link_point.y],
+            [steering_rod_link_point.z - wheel_contact_point.z],
+            color=state_color,
+            marker="X",
+            zorder=3,
+        )
         axis_camber.scatter(
             -wheel_contact_point.z,
             float(
@@ -464,6 +542,12 @@ def plot_xz(
         axis_roll_center.scatter(
             -wheel_contact_point.z,
             roll_center_point.z - wheel_center_point.z + geometry.wheel_radius_in,
+            color=state_color,
+            zorder=2,
+        )
+        axis_future.scatter(
+            -wheel_contact_point.z,
+            float(np.rad2deg(toe_angle_rad)),
             color=state_color,
             zorder=2,
         )
@@ -529,7 +613,32 @@ def plot_xz(
     axis_roll_center.set_ylabel("Roll-center height above ground (in)")
     axis_roll_center.set_title("Roll-center height above ground versus ride height")
     axis_roll_center.grid()
-    axis_future.set_axis_off()
+    axis_future.plot(
+        ride_heights_in,
+        np.rad2deg(toe_angles_rad),
+        color="tab:blue",
+        label="Straight ahead",
+        zorder=1,
+    )
+    axis_future.plot(
+        ride_heights_in,
+        np.rad2deg(toe_angles_right_turn_rad),
+        color="tab:orange",
+        label="Right turn",
+        zorder=1,
+    )
+    axis_future.plot(
+        ride_heights_in,
+        np.rad2deg(toe_angles_left_turn_rad),
+        color="tab:green",
+        label="Left turn",
+        zorder=1,
+    )
+    axis_future.set_xlabel("Ride height (in)")
+    axis_future.set_ylabel("Toe angle (degrees)")
+    axis_future.set_title("Bump steer: toe versus ride height")
+    axis_future.grid()
+    axis_future.legend(loc="best")
     geometry_figure.savefig(geometry_output_path, dpi=200)
     ride_height_figure.savefig(ride_height_output_path, dpi=200)
 
@@ -566,6 +675,7 @@ def geometry_is_valid(
                 geometry.wheel_center(lower_angle_rad, toe_angle_rad),
                 geometry.wheel_contact(lower_angle_rad, toe_angle_rad),
                 geometry.tie_rod_point(lower_angle_rad, toe_angle_rad),
+                geometry.steering_rod_link_point(lower_angle_rad, toe_angle_rad),
             )
     except FloatingPointError:
         return False
@@ -581,6 +691,45 @@ def geometry_is_valid(
             ),
         ),
     )
+
+
+def toe_angle_for_fixed_steering_rod_point(
+    geometry: Geometry,
+    lower_angle_rad: float,
+    steering_rod_link_point_x_in: float,
+    toe_angle_initial_rad: float,
+) -> float:
+    """Return toe that keeps the steering-rod link point at a target x value.
+
+    Args:
+        geometry: Fixed dimensions for the modeled suspension side.
+        lower_angle_rad: Lower control-arm angle to evaluate in radians.
+        steering_rod_link_point_x_in: Fixed steering-rod link-point x coordinate.
+        toe_angle_initial_rad: Initial toe angle supplied to the scalar solver.
+
+    Returns:
+        Toe angle in radians that maintains the steering-rod link point.
+
+    Raises:
+        ValueError: If the scalar toe solve does not converge.
+
+    """
+    toe_angle_solution = root_scalar(
+        lambda toe_angle_rad: geometry.steering_rod_link_point(
+            lower_angle_rad,
+            toe_angle_rad,
+        ).x
+        - steering_rod_link_point_x_in,
+        method="secant",
+        x0=toe_angle_initial_rad,
+        x1=toe_angle_initial_rad + float(np.deg2rad(0.1)),
+        xtol=1e-10,
+    )
+    if not toe_angle_solution.converged:
+        message = "Toe calculation did not converge for the steering-rod link point."
+        raise ValueError(message)
+
+    return float(toe_angle_solution.root)
 
 
 def main() -> int:
@@ -627,9 +776,27 @@ def main() -> int:
             sorted_lower_angles_rad,
         ),
     )
-    toe_angle_max_bump_rad = float(np.deg2rad(-0.0))
     toe_angle_rest_rad = float(np.deg2rad(-3.0))
-    toe_angle_max_drop_rad = float(np.deg2rad(0.0))
+    steering_rod_link_point_rest_x_in = geometry.steering_rod_link_point(
+        lower_angle_rest_rad,
+        toe_angle_rest_rad,
+    ).x
+    steering_rod_length_rest_in = 2.0 * steering_rod_link_point_rest_x_in
+    print(f"Resting steering rod length: {steering_rod_length_rest_in:.3f} in")
+    toe_angle_right_turn_rest_rad = toe_angle_rest_rad + float(np.deg2rad(5.0))
+    toe_angle_left_turn_rest_rad = toe_angle_rest_rad - float(np.deg2rad(5.0))
+    toe_angle_max_bump_rad = toe_angle_for_fixed_steering_rod_point(
+        geometry,
+        lower_angle_max_bump_rad,
+        steering_rod_link_point_rest_x_in,
+        toe_angle_rest_rad,
+    )
+    toe_angle_max_drop_rad = toe_angle_for_fixed_steering_rod_point(
+        geometry,
+        lower_angle_max_drop_rad,
+        steering_rod_link_point_rest_x_in,
+        toe_angle_rest_rad,
+    )
     lower_angles_rad = [
         lower_angle_rad
         for lower_angle_rad in valid_lower_angles_rad
@@ -638,20 +805,37 @@ def main() -> int:
         <= ride_height_max_drop_in
     ]
     toe_angles_rad = [
-        float(
-            np.interp(
-                -geometry.wheel_contact(lower_angle_rad, 0.0).z,
-                (
-                    ride_height_max_bump_in,
-                    ride_height_rest_in,
-                    ride_height_max_drop_in,
-                ),
-                (
-                    toe_angle_max_bump_rad,
-                    toe_angle_rest_rad,
-                    toe_angle_max_drop_rad,
-                ),
-            ),
+        toe_angle_for_fixed_steering_rod_point(
+            geometry,
+            lower_angle_rad,
+            steering_rod_link_point_rest_x_in,
+            toe_angle_rest_rad,
+        )
+        for lower_angle_rad in lower_angles_rad
+    ]
+    steering_rod_link_point_right_turn_rest_x_in = geometry.steering_rod_link_point(
+        lower_angle_rest_rad,
+        toe_angle_right_turn_rest_rad,
+    ).x
+    toe_angles_right_turn_rad = [
+        toe_angle_for_fixed_steering_rod_point(
+            geometry,
+            lower_angle_rad,
+            steering_rod_link_point_right_turn_rest_x_in,
+            toe_angle_right_turn_rest_rad,
+        )
+        for lower_angle_rad in lower_angles_rad
+    ]
+    steering_rod_link_point_left_turn_rest_x_in = geometry.steering_rod_link_point(
+        lower_angle_rest_rad,
+        toe_angle_left_turn_rest_rad,
+    ).x
+    toe_angles_left_turn_rad = [
+        toe_angle_for_fixed_steering_rod_point(
+            geometry,
+            lower_angle_rad,
+            steering_rod_link_point_left_turn_rest_x_in,
+            toe_angle_left_turn_rest_rad,
         )
         for lower_angle_rad in lower_angles_rad
     ]
@@ -659,6 +843,8 @@ def main() -> int:
         geometry,
         lower_angles_rad,
         toe_angles_rad,
+        toe_angles_right_turn_rad,
+        toe_angles_left_turn_rad,
         lower_angle_max_bump_rad,
         toe_angle_max_bump_rad,
         lower_angle_rest_rad,
