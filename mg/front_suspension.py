@@ -76,6 +76,10 @@ class Geometry(NamedTuple):
 
     wheel_radius_in: float = 22.1 / 2
 
+    tie_rod_inward_in: float = 1
+    tie_rod_up_in: float = 3
+    tie_rod_forward_in: float = 8
+
     @property
     def caster_cos(self) -> float:
         """Cosine of the kingpin caster angle."""
@@ -259,6 +263,54 @@ class Geometry(NamedTuple):
             ),
             lower_angle_rad,
             toe_angle_rad,
+        )
+
+    def tie_rod_point(self, lower_angle_rad: float, toe_angle_rad: float) -> Point:
+        """Return the outer tie-rod point in the wheel-disc coordinate frame.
+
+        The tie-rod point is inboard along the wheel spindle, upward along the
+        upright, and forward in the wheel-disc plane.
+
+        Returns:
+            The outer tie-rod point in inches.
+
+        """
+        axle_point = self.axle(lower_angle_rad)
+        wheel_center_point = self.wheel_center(lower_angle_rad, toe_angle_rad)
+        wheel_outward_vector = wheel_center_point - axle_point
+        wheel_outward_length_in = abs(wheel_outward_vector)
+        wheel_outward_unit_x = wheel_outward_vector.x / wheel_outward_length_in
+        wheel_outward_unit_y = wheel_outward_vector.y / wheel_outward_length_in
+        wheel_outward_unit_z = wheel_outward_vector.z / wheel_outward_length_in
+        upright_vector = self.upper_trunnion(lower_angle_rad) - self.lower_trunnion(
+            lower_angle_rad,
+        )
+        upright_length_in = abs(upright_vector)
+        upright_unit_x = upright_vector.x / upright_length_in
+        upright_unit_y = upright_vector.y / upright_length_in
+        upright_unit_z = upright_vector.z / upright_length_in
+        wheel_forward_vector = Point(
+            wheel_outward_unit_y * upright_unit_z
+            - wheel_outward_unit_z * upright_unit_y,
+            wheel_outward_unit_z * upright_unit_x
+            - wheel_outward_unit_x * upright_unit_z,
+            wheel_outward_unit_x * upright_unit_y
+            - wheel_outward_unit_y * upright_unit_x,
+        )
+        wheel_forward_length_in = abs(wheel_forward_vector)
+        wheel_forward_unit_x = wheel_forward_vector.x / wheel_forward_length_in
+        wheel_forward_unit_y = wheel_forward_vector.y / wheel_forward_length_in
+        wheel_forward_unit_z = wheel_forward_vector.z / wheel_forward_length_in
+        return wheel_center_point + Point(
+            -self.tie_rod_inward_in * wheel_outward_unit_x
+            + self.tie_rod_up_in * upright_unit_x
+            + self.tie_rod_forward_in * wheel_forward_unit_x,
+            -self.tie_rod_inward_in * wheel_outward_unit_y
+            + self.tie_rod_up_in * upright_unit_y
+            + self.tie_rod_forward_in * wheel_forward_unit_y,
+            -self.tie_rod_inward_in * wheel_outward_unit_z
+            + self.tie_rod_up_in * upright_unit_z
+            + self.tie_rod_forward_in * wheel_forward_unit_z,
         )
 
     def instant_center(self, lower_angle_rad: float) -> Point:

@@ -89,6 +89,12 @@ def plot_xz(
             zip(lower_angles_rad, toe_angles_rad, strict=True),
         ),
     )
+    tie_rod_points = list(
+        starmap(
+            geometry.tie_rod_point,
+            zip(lower_angles_rad, toe_angles_rad, strict=True),
+        ),
+    )
     ride_heights_in = [
         -wheel_contact_point.z for wheel_contact_point in wheel_contact_points
     ]
@@ -110,6 +116,7 @@ def plot_xz(
         ("Lower trunnion", lower_trunnion_points, "tab:green"),
         ("Upper trunnion", upper_trunnion_points, "tab:red"),
         ("Wheel contact", wheel_contact_points, "tab:purple"),
+        ("Tie-rod point", tie_rod_points, "tab:brown"),
     )
     for point_name, geometry_point_path, path_color in geometry_point_paths:
         axis_geometry.plot(
@@ -137,6 +144,31 @@ def plot_xz(
             label=f"{point_name} path",
             zorder=1,
         )
+    axis_geometry_yz.plot(
+        [tie_rod_point.y for tie_rod_point in tie_rod_points],
+        [tie_rod_point.z for tie_rod_point in tie_rod_points],
+        color="tab:brown",
+        linestyle=":",
+        linewidth=2.0,
+        label="Tie-rod point path",
+        zorder=1,
+    )
+    axis_geometry_contact_yz.plot(
+        [tie_rod_point.y for tie_rod_point in tie_rod_points],
+        [
+            tie_rod_point.z - wheel_contact_point.z
+            for tie_rod_point, wheel_contact_point in zip(
+                tie_rod_points,
+                wheel_contact_points,
+                strict=True,
+            )
+        ],
+        color="tab:brown",
+        linestyle=":",
+        linewidth=2.0,
+        label="Tie-rod point path",
+        zorder=1,
+    )
 
     state_angles = (
         (
@@ -171,6 +203,7 @@ def plot_xz(
         wheel_center_point = geometry.wheel_center(lower_angle_rad, toe_angle_rad)
         wheel_contact_point = geometry.wheel_contact(lower_angle_rad, toe_angle_rad)
         roll_center_point = geometry.roll_center(lower_angle_rad, toe_angle_rad)
+        tie_rod_point = geometry.tie_rod_point(lower_angle_rad, toe_angle_rad)
         four_bar_points = (
             lower_pickup_point,
             upper_pickup_point,
@@ -215,6 +248,13 @@ def plot_xz(
             marker="s",
             label="Roll center" if state_name == "Maximum bump" else None,
             zorder=4,
+        )
+        axis_geometry.scatter(
+            [tie_rod_point.x],
+            [tie_rod_point.z],
+            color=state_color,
+            marker="D",
+            zorder=3,
         )
         axis_geometry.plot(
             [instant_center_point.x, lower_trunnion_point.x],
@@ -289,6 +329,13 @@ def plot_xz(
             label="Roll center" if state_name == "Maximum bump" else None,
             zorder=4,
         )
+        axis_geometry_contact.scatter(
+            [tie_rod_point.x],
+            [tie_rod_point.z - wheel_contact_point.z],
+            color=state_color,
+            marker="D",
+            zorder=3,
+        )
         axis_geometry_contact.plot(
             [instant_center_point.x, lower_trunnion_point.x],
             [
@@ -359,6 +406,13 @@ def plot_xz(
             label="Roll center" if state_name == "Maximum bump" else None,
             zorder=4,
         )
+        axis_geometry_yz.scatter(
+            [tie_rod_point.y],
+            [tie_rod_point.z],
+            color=state_color,
+            marker="D",
+            zorder=3,
+        )
         axis_geometry_contact_yz.add_patch(
             Ellipse(
                 (
@@ -383,6 +437,13 @@ def plot_xz(
             marker="s",
             label="Roll center" if state_name == "Maximum bump" else None,
             zorder=4,
+        )
+        axis_geometry_contact_yz.scatter(
+            [tie_rod_point.y],
+            [tie_rod_point.z - wheel_contact_point.z],
+            color=state_color,
+            marker="D",
+            zorder=3,
         )
         axis_camber.scatter(
             -wheel_contact_point.z,
@@ -504,6 +565,7 @@ def geometry_is_valid(
                 geometry.axle(lower_angle_rad),
                 geometry.wheel_center(lower_angle_rad, toe_angle_rad),
                 geometry.wheel_contact(lower_angle_rad, toe_angle_rad),
+                geometry.tie_rod_point(lower_angle_rad, toe_angle_rad),
             )
     except FloatingPointError:
         return False
@@ -565,9 +627,9 @@ def main() -> int:
             sorted_lower_angles_rad,
         ),
     )
-    toe_angle_max_bump_rad = float(np.deg2rad(-10.0))
+    toe_angle_max_bump_rad = float(np.deg2rad(-0.0))
     toe_angle_rest_rad = float(np.deg2rad(-3.0))
-    toe_angle_max_drop_rad = float(np.deg2rad(10.0))
+    toe_angle_max_drop_rad = float(np.deg2rad(0.0))
     lower_angles_rad = [
         lower_angle_rad
         for lower_angle_rad in valid_lower_angles_rad
