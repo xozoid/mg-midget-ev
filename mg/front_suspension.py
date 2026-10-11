@@ -63,13 +63,13 @@ class Point(NamedTuple):
 class Geometry(NamedTuple):
     """Fixed dimensions and angles for one side of the front suspension."""
 
-    lower_in: float = 12
-    lower_pickup_width_in: float = 36
-    upper_in: float = 14
+    lower_in: float = 10
+    lower_pickup_width_in: float = 24
+    upper_in: float = 12
     inner_in: float = 7
     inner_angle_rad: float = float(np.deg2rad(20))
-    outer_in: float = 9
-    caster_rad: float = float(np.deg2rad(3.0))
+    outer_in: float = 12
+    caster_rad: float = float(np.deg2rad(10.0))
 
     axle_length_in: float = 5
     axle_offset_in: float = 5
@@ -209,4 +209,60 @@ class Geometry(NamedTuple):
             0.0,  # wheel is a disk so no Y translation from wheel center
             -self.wheel_radius_in
             * np.sin(theta_outer_horizon),  # no caster because disk
+        )
+
+    def instant_center(self, lower_angle_rad: float) -> Point:
+        """Return the projected instant center at the supplied arm angle.
+
+        Returns:
+            The instant-center point in inches.
+
+        """
+        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
+        theta_lower_to_outer_rad = theta_outer_horizon + lower_angle_rad
+        upper_trunnion_point = self.upper_trunnion(lower_angle_rad)
+        upper_pickup_point = self.upper_pickup()
+        theta_upper_horizon = float(
+            np.arctan2(
+                (upper_trunnion_point.z - upper_pickup_point.z) / self.caster_cos,
+                upper_trunnion_point.x - upper_pickup_point.x,
+            ),
+        )
+        theta_outer_to_upper_rad = float(
+            np.pi - theta_outer_horizon - theta_upper_horizon,
+        )
+        theta_instant_center_rad = float(
+            np.pi - theta_outer_to_upper_rad - theta_lower_to_outer_rad,
+        )
+        instant_center_distance_in = self.outer_in * float(
+            np.sin(theta_outer_to_upper_rad) / np.sin(theta_instant_center_rad),
+        )
+        instant_center_projection_in = instant_center_distance_in * float(
+            np.sin(lower_angle_rad),
+        )
+        return self.lower_trunnion(lower_angle_rad) + Point(
+            -instant_center_distance_in * float(np.cos(lower_angle_rad)),
+            -instant_center_projection_in * self.caster_sin,
+            -instant_center_projection_in * self.caster_cos,
+        )
+
+    def roll_center(self, lower_angle_rad: float) -> Point:
+        """Return the x=0 intersection of the instant-center contact line.
+
+        Returns:
+            The roll-center point in inches.
+
+        """
+        instant_center_point = self.instant_center(lower_angle_rad)
+        wheel_contact_point = self.wheel_contact(lower_angle_rad)
+        instant_center_to_contact_x_in = wheel_contact_point.x - instant_center_point.x
+        interpolation_fraction = (
+            -instant_center_point.x / instant_center_to_contact_x_in
+        )
+        return Point(
+            0.0,
+            instant_center_point.y
+            + interpolation_fraction * (wheel_contact_point.y - instant_center_point.y),
+            instant_center_point.z
+            + interpolation_fraction * (wheel_contact_point.z - instant_center_point.z),
         )

@@ -25,3 +25,4 @@ result.json
 *.npz
 
 coastdown_output
+*.png
