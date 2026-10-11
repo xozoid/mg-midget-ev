@@ -180,7 +180,47 @@ class Geometry(NamedTuple):
             outer_projection_in * self.caster_cos,
         )
 
-    def wheel_center(self, lower_angle_rad: float) -> Point:
+    def rotate_vector_about_upright(
+        self,
+        vector: Point,
+        lower_angle_rad: float,
+        toe_angle_rad: float,
+    ) -> Point:
+        """Rotate a vector about the lower-to-upper trunnion axis.
+
+        Positive toe is a negative right-hand rotation around the upright so that
+        the wheel moves toward negative longitudinal position.
+
+        Returns:
+            The toe-rotated vector.
+
+        """
+        lower_trunnion_point = self.lower_trunnion(lower_angle_rad)
+        upright_vector = self.upper_trunnion(lower_angle_rad) - lower_trunnion_point
+        upright_length_in = abs(upright_vector)
+        upright_unit_x = upright_vector.x / upright_length_in
+        upright_unit_y = upright_vector.y / upright_length_in
+        upright_unit_z = upright_vector.z / upright_length_in
+        toe_cos = float(np.cos(-toe_angle_rad))
+        toe_sin = float(np.sin(-toe_angle_rad))
+        upright_vector_dot_product = (
+            upright_unit_x * vector.x
+            + upright_unit_y * vector.y
+            + upright_unit_z * vector.z
+        )
+        return Point(
+            vector.x * toe_cos
+            + (upright_unit_y * vector.z - upright_unit_z * vector.y) * toe_sin
+            + upright_unit_x * upright_vector_dot_product * (1.0 - toe_cos),
+            vector.y * toe_cos
+            + (upright_unit_z * vector.x - upright_unit_x * vector.z) * toe_sin
+            + upright_unit_y * upright_vector_dot_product * (1.0 - toe_cos),
+            vector.z * toe_cos
+            + (upright_unit_x * vector.y - upright_unit_y * vector.x) * toe_sin
+            + upright_unit_z * upright_vector_dot_product * (1.0 - toe_cos),
+        )
+
+    def wheel_center(self, lower_angle_rad: float, toe_angle_rad: float) -> Point:
         """Return the wheel center at the supplied lower control-arm angle.
 
         Returns:
@@ -190,13 +230,17 @@ class Geometry(NamedTuple):
         theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
         theta_axle_horizon = float(np.pi) / 2.0 - theta_outer_horizon
         axle_projection_in = self.axle_offset_in * float(np.sin(theta_axle_horizon))
-        return self.axle(lower_angle_rad) + Point(
-            self.axle_length_in * float(np.cos(theta_axle_horizon)),
-            axle_projection_in * self.caster_sin,
-            axle_projection_in * self.caster_cos,
+        return self.axle(lower_angle_rad) + self.rotate_vector_about_upright(
+            Point(
+                self.axle_length_in * float(np.cos(theta_axle_horizon)),
+                axle_projection_in * self.caster_sin,
+                axle_projection_in * self.caster_cos,
+            ),
+            lower_angle_rad,
+            toe_angle_rad,
         )
 
-    def wheel_contact(self, lower_angle_rad: float) -> Point:
+    def wheel_contact(self, lower_angle_rad: float, toe_angle_rad: float) -> Point:
         """Return the tire contact point at the supplied lower control-arm angle.
 
         Returns:
@@ -204,11 +248,17 @@ class Geometry(NamedTuple):
 
         """
         theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
-        return self.wheel_center(lower_angle_rad) + Point(
-            self.wheel_radius_in * np.cos(theta_outer_horizon),
-            0.0,  # wheel is a disk so no Y translation from wheel center
-            -self.wheel_radius_in
-            * np.sin(theta_outer_horizon),  # no caster because disk
+        return self.wheel_center(
+            lower_angle_rad,
+            toe_angle_rad,
+        ) + self.rotate_vector_about_upright(
+            Point(
+                self.wheel_radius_in * float(np.cos(theta_outer_horizon)),
+                0.0,
+                -self.wheel_radius_in * float(np.sin(theta_outer_horizon)),
+            ),
+            lower_angle_rad,
+            toe_angle_rad,
         )
 
     def instant_center(self, lower_angle_rad: float) -> Point:
@@ -246,7 +296,7 @@ class Geometry(NamedTuple):
             -instant_center_projection_in * self.caster_cos,
         )
 
-    def roll_center(self, lower_angle_rad: float) -> Point:
+    def roll_center(self, lower_angle_rad: float, toe_angle_rad: float) -> Point:
         """Return the x=0 intersection of the instant-center contact line.
 
         Returns:
@@ -254,7 +304,7 @@ class Geometry(NamedTuple):
 
         """
         instant_center_point = self.instant_center(lower_angle_rad)
-        wheel_contact_point = self.wheel_contact(lower_angle_rad)
+        wheel_contact_point = self.wheel_contact(lower_angle_rad, toe_angle_rad)
         instant_center_to_contact_x_in = wheel_contact_point.x - instant_center_point.x
         interpolation_fraction = (
             -instant_center_point.x / instant_center_to_contact_x_in

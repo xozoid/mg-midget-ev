@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from itertools import starmap
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Circle
+from matplotlib.patches import Ellipse
 
 from mg.front_suspension import Geometry
 
@@ -18,9 +19,13 @@ if TYPE_CHECKING:
 def plot_xz(
     geometry: Geometry,
     lower_angles_rad: Sequence[float],
+    toe_angles_rad: Sequence[float],
     lower_angle_max_bump_rad: float,
+    toe_angle_max_bump_rad: float,
     lower_angle_rest_rad: float,
+    toe_angle_rest_rad: float,
     lower_angle_max_drop_rad: float,
+    toe_angle_max_drop_rad: float,
     geometry_output_path: Path,
     ride_height_output_path: Path,
 ) -> None:
@@ -29,9 +34,13 @@ def plot_xz(
     Args:
         geometry: Fixed dimensions for the modeled suspension side.
         lower_angles_rad: Sweep of lower control-arm angles in radians.
+        toe_angles_rad: Toe angles corresponding to ``lower_angles_rad``.
         lower_angle_max_bump_rad: Lower control-arm angle at maximum bump.
+        toe_angle_max_bump_rad: Toe angle at maximum bump.
         lower_angle_rest_rad: Lower control-arm rest angle in radians.
+        toe_angle_rest_rad: Toe angle at rest.
         lower_angle_max_drop_rad: Lower control-arm angle at maximum drop.
+        toe_angle_max_drop_rad: Toe angle at maximum drop.
         geometry_output_path: PNG file for the two geometry views.
         ride_height_output_path: PNG file for the ride-height analysis plots.
 
@@ -62,12 +71,24 @@ def plot_xz(
     upper_trunnion_points = [
         geometry.upper_trunnion(lower_angle_rad) for lower_angle_rad in lower_angles_rad
     ]
-    wheel_contact_points = [
-        geometry.wheel_contact(lower_angle_rad) for lower_angle_rad in lower_angles_rad
-    ]
-    roll_center_points = [
-        geometry.roll_center(lower_angle_rad) for lower_angle_rad in lower_angles_rad
-    ]
+    wheel_contact_points = list(
+        starmap(
+            geometry.wheel_contact,
+            zip(lower_angles_rad, toe_angles_rad, strict=True),
+        ),
+    )
+    roll_center_points = list(
+        starmap(
+            geometry.roll_center,
+            zip(lower_angles_rad, toe_angles_rad, strict=True),
+        ),
+    )
+    wheel_center_points = list(
+        starmap(
+            geometry.wheel_center,
+            zip(lower_angles_rad, toe_angles_rad, strict=True),
+        ),
+    )
     ride_heights_in = [
         -wheel_contact_point.z for wheel_contact_point in wheel_contact_points
     ]
@@ -77,8 +98,13 @@ def plot_xz(
         )
         for lower_angle_rad in lower_angles_rad
     ]
-    roll_center_heights_in = [
-        roll_center_point.z for roll_center_point in roll_center_points
+    roll_center_heights_above_ground_in = [
+        roll_center_point.z - wheel_center_point.z + geometry.wheel_radius_in
+        for roll_center_point, wheel_center_point in zip(
+            roll_center_points,
+            wheel_center_points,
+            strict=True,
+        )
     ]
     geometry_point_paths = (
         ("Lower trunnion", lower_trunnion_points, "tab:green"),
@@ -113,22 +139,38 @@ def plot_xz(
         )
 
     state_angles = (
-        (lower_angle_max_bump_rad, "Maximum bump", "tab:orange"),
-        (lower_angle_rest_rad, "Rest", "tab:green"),
-        (lower_angle_max_drop_rad, "Maximum drop", "tab:red"),
+        (
+            lower_angle_max_bump_rad,
+            toe_angle_max_bump_rad,
+            "Maximum bump",
+            "tab:orange",
+        ),
+        (lower_angle_rest_rad, toe_angle_rest_rad, "Rest", "tab:green"),
+        (
+            lower_angle_max_drop_rad,
+            toe_angle_max_drop_rad,
+            "Maximum drop",
+            "tab:red",
+        ),
     )
-    wheel_contact_rest_x_in = geometry.wheel_contact(lower_angle_rest_rad).x
-    for lower_angle_rad, state_name, state_color in state_angles:
+    wheel_ellipse_xz_width_in = (
+        2.0 * geometry.wheel_radius_in * abs(np.sin(toe_angle_rest_rad))
+    )
+    wheel_ellipse_yz_width_in = (
+        2.0 * geometry.wheel_radius_in * abs(np.cos(toe_angle_rest_rad))
+    )
+    wheel_contact_rest_x_in = geometry.wheel_contact(
+        lower_angle_rest_rad,
+        toe_angle_rest_rad,
+    ).x
+    for lower_angle_rad, toe_angle_rad, state_name, state_color in state_angles:
         lower_trunnion_point = geometry.lower_trunnion(lower_angle_rad)
         upper_trunnion_point = geometry.upper_trunnion(lower_angle_rad)
         instant_center_point = geometry.instant_center(lower_angle_rad)
         axle_point = geometry.axle(lower_angle_rad)
-        wheel_center_point = geometry.wheel_center(lower_angle_rad)
-        wheel_contact_point = geometry.wheel_contact(lower_angle_rad)
-        roll_center_point = geometry.roll_center(lower_angle_rad)
-        wheel_far_edge_point = wheel_center_point + (
-            wheel_center_point - wheel_contact_point
-        )
+        wheel_center_point = geometry.wheel_center(lower_angle_rad, toe_angle_rad)
+        wheel_contact_point = geometry.wheel_contact(lower_angle_rad, toe_angle_rad)
+        roll_center_point = geometry.roll_center(lower_angle_rad, toe_angle_rad)
         four_bar_points = (
             lower_pickup_point,
             upper_pickup_point,
@@ -198,15 +240,19 @@ def plot_xz(
             linewidth=1.5,
             zorder=2,
         )
-        axis_geometry.plot(
-            [wheel_contact_point.x, wheel_far_edge_point.x],
-            [
-                wheel_contact_point.z,
-                wheel_far_edge_point.z,
-            ],
-            color=state_color,
-            linewidth=2.0,
-            zorder=2,
+        axis_geometry.add_patch(
+            Ellipse(
+                (wheel_center_point.x, wheel_center_point.z),
+                width=wheel_ellipse_xz_width_in,
+                height=2.0 * geometry.wheel_radius_in,
+                angle=float(
+                    np.rad2deg(-geometry.outer_horizon_rad(lower_angle_rad)) - 90.0,
+                ),
+                edgecolor=state_color,
+                facecolor="none",
+                linewidth=2.0,
+                zorder=2,
+            ),
         )
         axis_geometry_contact.plot(
             four_bar_x_in,
@@ -276,17 +322,28 @@ def plot_xz(
             linewidth=1.5,
             zorder=2,
         )
-        axis_geometry_contact.plot(
-            [wheel_contact_point.x, wheel_far_edge_point.x],
-            [0.0, wheel_far_edge_point.z - wheel_contact_point.z],
-            color=state_color,
-            linewidth=2.0,
-            zorder=2,
+        axis_geometry_contact.add_patch(
+            Ellipse(
+                (
+                    wheel_center_point.x,
+                    wheel_center_point.z - wheel_contact_point.z,
+                ),
+                width=wheel_ellipse_xz_width_in,
+                height=2.0 * geometry.wheel_radius_in,
+                angle=float(
+                    np.rad2deg(-geometry.outer_horizon_rad(lower_angle_rad)) - 90.0,
+                ),
+                edgecolor=state_color,
+                facecolor="none",
+                linewidth=2.0,
+                zorder=2,
+            ),
         )
         axis_geometry_yz.add_patch(
-            Circle(
+            Ellipse(
                 (wheel_center_point.y, wheel_center_point.z),
-                radius=geometry.wheel_radius_in,
+                width=wheel_ellipse_yz_width_in,
+                height=2.0 * geometry.wheel_radius_in,
                 edgecolor=state_color,
                 facecolor="none",
                 linewidth=2.0,
@@ -303,12 +360,13 @@ def plot_xz(
             zorder=4,
         )
         axis_geometry_contact_yz.add_patch(
-            Circle(
+            Ellipse(
                 (
                     wheel_center_point.y,
                     geometry.wheel_radius_in,
                 ),
-                radius=geometry.wheel_radius_in,
+                width=wheel_ellipse_yz_width_in,
+                height=2.0 * geometry.wheel_radius_in,
                 edgecolor=state_color,
                 facecolor="none",
                 linewidth=2.0,
@@ -344,7 +402,7 @@ def plot_xz(
         )
         axis_roll_center.scatter(
             -wheel_contact_point.z,
-            roll_center_point.z,
+            roll_center_point.z - wheel_center_point.z + geometry.wheel_radius_in,
             color=state_color,
             zorder=2,
         )
@@ -402,13 +460,13 @@ def plot_xz(
     axis_wheel_contact.grid()
     axis_roll_center.plot(
         ride_heights_in,
-        roll_center_heights_in,
+        roll_center_heights_above_ground_in,
         color="tab:blue",
         zorder=1,
     )
     axis_roll_center.set_xlabel("Ride height (in)")
-    axis_roll_center.set_ylabel("Roll-center height (in)")
-    axis_roll_center.set_title("Roll-center height versus ride height")
+    axis_roll_center.set_ylabel("Roll-center height above ground (in)")
+    axis_roll_center.set_title("Roll-center height above ground versus ride height")
     axis_roll_center.grid()
     axis_future.set_axis_off()
     geometry_figure.savefig(geometry_output_path, dpi=200)
@@ -418,12 +476,17 @@ def plot_xz(
     plt.close(ride_height_figure)
 
 
-def geometry_is_valid(geometry: Geometry, lower_angle_rad: float) -> bool:
+def geometry_is_valid(
+    geometry: Geometry,
+    lower_angle_rad: float,
+    toe_angle_rad: float,
+) -> bool:
     """Return whether all modeled points are finite at a lower-arm angle.
 
     Args:
         geometry: Fixed dimensions for the modeled suspension side.
         lower_angle_rad: Lower control-arm angle to evaluate in radians.
+        toe_angle_rad: Toe angle to evaluate in radians.
 
     Returns:
         Whether the suspension geometry can be evaluated at the supplied angle.
@@ -437,10 +500,10 @@ def geometry_is_valid(geometry: Geometry, lower_angle_rad: float) -> bool:
                 geometry.lower_trunnion(lower_angle_rad),
                 geometry.upper_trunnion(lower_angle_rad),
                 geometry.instant_center(lower_angle_rad),
-                geometry.roll_center(lower_angle_rad),
+                geometry.roll_center(lower_angle_rad, toe_angle_rad),
                 geometry.axle(lower_angle_rad),
-                geometry.wheel_center(lower_angle_rad),
-                geometry.wheel_contact(lower_angle_rad),
+                geometry.wheel_center(lower_angle_rad, toe_angle_rad),
+                geometry.wheel_contact(lower_angle_rad, toe_angle_rad),
             )
     except FloatingPointError:
         return False
@@ -469,13 +532,13 @@ def main() -> int:
     valid_lower_angles_rad = [
         float(lower_angle_rad)
         for lower_angle_rad in np.linspace(-np.pi / 4.0, np.pi / 4.0, 301)
-        if geometry_is_valid(geometry, float(lower_angle_rad))
+        if geometry_is_valid(geometry, float(lower_angle_rad), 0.0)
     ]
     ride_height_rest_in = 7.0
     ride_height_max_bump_in = ride_height_rest_in - 2.0
     ride_height_max_drop_in = ride_height_rest_in + 3.0
     ride_heights_in = [
-        -geometry.wheel_contact(lower_angle_rad).z
+        -geometry.wheel_contact(lower_angle_rad, 0.0).z
         for lower_angle_rad in valid_lower_angles_rad
     ]
     ride_height_order = np.argsort(ride_heights_in)
@@ -502,19 +565,44 @@ def main() -> int:
             sorted_lower_angles_rad,
         ),
     )
+    toe_angle_max_bump_rad = float(np.deg2rad(-10.0))
+    toe_angle_rest_rad = float(np.deg2rad(-3.0))
+    toe_angle_max_drop_rad = float(np.deg2rad(10.0))
     lower_angles_rad = [
         lower_angle_rad
         for lower_angle_rad in valid_lower_angles_rad
         if ride_height_max_bump_in
-        <= -geometry.wheel_contact(lower_angle_rad).z
+        <= -geometry.wheel_contact(lower_angle_rad, 0.0).z
         <= ride_height_max_drop_in
+    ]
+    toe_angles_rad = [
+        float(
+            np.interp(
+                -geometry.wheel_contact(lower_angle_rad, 0.0).z,
+                (
+                    ride_height_max_bump_in,
+                    ride_height_rest_in,
+                    ride_height_max_drop_in,
+                ),
+                (
+                    toe_angle_max_bump_rad,
+                    toe_angle_rest_rad,
+                    toe_angle_max_drop_rad,
+                ),
+            ),
+        )
+        for lower_angle_rad in lower_angles_rad
     ]
     plot_xz(
         geometry,
         lower_angles_rad,
+        toe_angles_rad,
         lower_angle_max_bump_rad,
+        toe_angle_max_bump_rad,
         lower_angle_rest_rad,
+        toe_angle_rest_rad,
         lower_angle_max_drop_rad,
+        toe_angle_max_drop_rad,
         Path("front_suspension_geometries.png"),
         Path("front_suspension_ride_height.png"),
     )
