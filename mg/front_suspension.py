@@ -65,11 +65,16 @@ class Geometry(NamedTuple):
 
     lower_in: float = 12
     lower_pickup_width_in: float = 36
-    upper_in: float = 9
-    inner_in: float = 10
-    inner_angle_rad: float = float(np.deg2rad(5))
+    upper_in: float = 14
+    inner_in: float = 7
+    inner_angle_rad: float = float(np.deg2rad(20))
     outer_in: float = 9
     caster_rad: float = float(np.deg2rad(3.0))
+
+    axle_length_in: float = 5
+    axle_offset_in: float = 5
+
+    wheel_radius_in: float = 22.1 / 2
 
     @property
     def caster_cos(self) -> float:
@@ -129,20 +134,79 @@ class Geometry(NamedTuple):
             The upper trunnion point in inches.
 
         """
-        d = abs(self.upper_pickup() - self.lower_trunnion(lower_angle_rad))
-        theta_lower_inner = self.inner_angle_rad + float(np.pi) / 2.0 - lower_angle_rad
-
-        theta_lower_d = np.arcsin(np.sin(theta_lower_inner) / d * self.inner_in)
-        theta_outer_d = np.arccos(
-            (d**2 + self.outer_in**2 - self.upper_in**2) / (2 * d * self.outer_in),
-        )
-
-        theta_lower_outer = theta_lower_d + theta_outer_d
-
-        theta_outer_horizon = theta_lower_outer - lower_angle_rad
-        outer_projection_in = self.lower_in * float(np.sin(theta_outer_horizon))
+        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
+        outer_projection_in = self.outer_in * float(np.sin(theta_outer_horizon))
         return self.lower_trunnion(lower_angle_rad) + Point(
             -self.outer_in * float(np.cos(theta_outer_horizon)),
             outer_projection_in * self.caster_sin,
             outer_projection_in * self.caster_cos,
+        )
+
+    def outer_horizon_rad(self, lower_angle_rad: float) -> float:
+        """Return the outer link angle from the lateral horizon.
+
+        Returns:
+            The outer link angle in radians.
+
+        """
+        trunnion_distance_in = abs(
+            self.upper_pickup() - self.lower_trunnion(lower_angle_rad),
+        )
+        theta_inner_to_lower_rad = (
+            self.inner_angle_rad + float(np.pi) / 2.0 - lower_angle_rad
+        )
+        theta_lower_trunnion_rad = np.arcsin(
+            np.sin(theta_inner_to_lower_rad) / trunnion_distance_in * self.inner_in,
+        )
+        theta_outer_trunnion_rad = np.arccos(
+            (trunnion_distance_in**2 + self.outer_in**2 - self.upper_in**2)
+            / (2.0 * trunnion_distance_in * self.outer_in),
+        )
+        theta_lower_to_outer_rad = theta_lower_trunnion_rad + theta_outer_trunnion_rad
+        return float(theta_lower_to_outer_rad - lower_angle_rad)
+
+    def axle(self, lower_angle_rad: float) -> Point:
+        """Return the axle point at the supplied lower control-arm angle.
+
+        Returns:
+            The axle point in inches.
+
+        """
+        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
+        outer_projection_in = self.axle_offset_in * float(np.sin(theta_outer_horizon))
+        return self.lower_trunnion(lower_angle_rad) + Point(
+            -self.axle_offset_in * float(np.cos(theta_outer_horizon)),
+            outer_projection_in * self.caster_sin,
+            outer_projection_in * self.caster_cos,
+        )
+
+    def wheel_center(self, lower_angle_rad: float) -> Point:
+        """Return the wheel center at the supplied lower control-arm angle.
+
+        Returns:
+            The wheel center point in inches.
+
+        """
+        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
+        theta_axle_horizon = float(np.pi) / 2.0 - theta_outer_horizon
+        axle_projection_in = self.axle_offset_in * float(np.sin(theta_axle_horizon))
+        return self.axle(lower_angle_rad) + Point(
+            self.axle_length_in * float(np.cos(theta_axle_horizon)),
+            axle_projection_in * self.caster_sin,
+            axle_projection_in * self.caster_cos,
+        )
+
+    def wheel_contact(self, lower_angle_rad: float) -> Point:
+        """Return the tire contact point at the supplied lower control-arm angle.
+
+        Returns:
+            The wheel contact point in inches.
+
+        """
+        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
+        return self.wheel_center(lower_angle_rad) + Point(
+            self.wheel_radius_in * np.cos(theta_outer_horizon),
+            0.0,  # wheel is a disk so no Y translation from wheel center
+            -self.wheel_radius_in
+            * np.sin(theta_outer_horizon),  # no caster because disk
         )
