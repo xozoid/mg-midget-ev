@@ -136,6 +136,22 @@ CALB_CA180FI = CellSpec(
     notes="Battery Hookup 1-cycle surplus benchmark used",
 )
 
+CALB_314 = CellSpec(
+    chemistry="LiFePO4",
+    manufacturer="CALB",
+    model="L173F314A",
+    nominal_voltage_v=3.2,
+    capacity_ah=314.0,
+    mass_kg=5.56,
+    continuous_c=1.0,
+    peak_c=2.0,
+    max_charge_c=0.5,
+    usable_soc_window=0.85,
+    today_price_usd_per_cell=79.0,
+    notes="EVLithium",
+)
+
+
 TESLA_S = CellSpec(
     chemistry="Li-ion",
     manufacturer="Tesla",
@@ -157,6 +173,7 @@ CELLS: list[CellSpec] = [
     EVE_LF280K,
     CATL_271,
     CALB_CA180FI,
+    CALB_314,
     # TESLA_S,
 ]
 
