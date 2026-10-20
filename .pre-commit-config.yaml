@@ -9,6 +9,8 @@ repos:
     hooks:
       - id: basedpyright
         language: system
+        entry: uv run basedpyright
+        files: ^(mg|tools)/
   - repo: https://github.com/pycqa/isort
     rev: 6.0.1
     hooks:

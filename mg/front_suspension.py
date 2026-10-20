@@ -63,26 +63,30 @@ class Point(NamedTuple):
 class Geometry(NamedTuple):
     """Fixed dimensions and angles for one side of the front suspension."""
 
-    lower_in: float = 10
-    lower_pickup_width_in: float = 24
-    upper_in: float = 12
-    inner_in: float = 7
-    inner_angle_rad: float = float(np.deg2rad(20))
-    outer_in: float = 12
-    caster_rad: float = float(np.deg2rad(10.0))
+    lower_in: float = 10.75
+    lower_pickup_width_in: float = 18
+    upper_in: float = 7.25
+    inner_in: float = 9
+    inner_angle_rad: float = float(np.deg2rad(-31.5))
+    outer_in: float = 8.25
+    caster_rad: float = float(np.deg2rad(3))
 
-    axle_length_in: float = 5
-    axle_offset_in: float = 5
+    kingpin_upper_inward_in: float = 0.75
+    kingpin_lower_inward_in: float = -1
 
-    wheel_radius_in: float = 22.1 / 2
+    axle_length_in: float = 2.5
+    axle_kingpin_angle_rad: float = float(np.deg2rad(8))
+    axle_offset_in: float = 3.75
 
-    tie_rod_inward_in: float = 1
-    tie_rod_up_in: float = -3
-    tie_rod_forward_in: float = 8
+    wheel_radius_in: float = 22.6 / 2
+
+    tie_rod_inward_in: float = 2.125
+    tie_rod_up_in: float = 1.5
+    tie_rod_forward_in: float = 5
 
     tie_rod_link_in: float = 8
-    steering_rod_y_in: float = -8
-    steering_rod_z_in: float = 3
+    steering_rod_y_in: float = -4.5
+    steering_rod_z_in: float = 5
 
     @property
     def caster_cos(self) -> float:
@@ -173,59 +177,168 @@ class Geometry(NamedTuple):
         theta_lower_to_outer_rad = theta_lower_trunnion_rad + theta_outer_trunnion_rad
         return float(theta_lower_to_outer_rad - lower_angle_rad)
 
+    def kingpin_axis(self, lower_angle_rad: float) -> tuple[Point, Point]:
+        """Return two points on the kingpin axis at the trunnion heights.
+
+        The measured trunnion offsets are perpendicular to the kingpin in the
+        suspension plane. Positive offsets point inboard.
+
+        Returns:
+            The lower and upper kingpin-axis points in inches.
+
+        """
+        lower_trunnion_point = self.lower_trunnion(lower_angle_rad)
+        upper_trunnion_point = self.upper_trunnion(lower_angle_rad)
+        trunnion_vector = upper_trunnion_point - lower_trunnion_point
+        trunnion_plane_z_in = trunnion_vector.z / self.caster_cos
+        trunnion_distance_in = float(
+            np.hypot(trunnion_vector.x, trunnion_plane_z_in),
+        )
+        trunnion_unit_x = trunnion_vector.x / trunnion_distance_in
+        trunnion_unit_z = trunnion_plane_z_in / trunnion_distance_in
+        offset_difference_in = (
+            self.kingpin_upper_inward_in - self.kingpin_lower_inward_in
+        )
+        normal_projection = -offset_difference_in / trunnion_distance_in
+        normal_perpendicular_component = float(
+            np.sqrt(1.0 - normal_projection**2),
+        )
+        inward_candidate_1_x = (
+            normal_projection * trunnion_unit_x
+            - normal_perpendicular_component * trunnion_unit_z
+        )
+        inward_candidate_1_z = (
+            normal_projection * trunnion_unit_z
+            + normal_perpendicular_component * trunnion_unit_x
+        )
+        inward_candidate_2_x = (
+            normal_projection * trunnion_unit_x
+            + normal_perpendicular_component * trunnion_unit_z
+        )
+        inward_candidate_2_z = (
+            normal_projection * trunnion_unit_z
+            - normal_perpendicular_component * trunnion_unit_x
+        )
+        inward_unit_x, inward_unit_z = (
+            (inward_candidate_1_x, inward_candidate_1_z)
+            if inward_candidate_1_x < inward_candidate_2_x
+            else (inward_candidate_2_x, inward_candidate_2_z)
+        )
+        inward_unit_vector = Point(
+            inward_unit_x,
+            inward_unit_z * self.caster_sin,
+            inward_unit_z * self.caster_cos,
+        )
+        return (
+            lower_trunnion_point
+            + Point(
+                inward_unit_vector.x * self.kingpin_lower_inward_in,
+                inward_unit_vector.y * self.kingpin_lower_inward_in,
+                inward_unit_vector.z * self.kingpin_lower_inward_in,
+            ),
+            upper_trunnion_point
+            + Point(
+                inward_unit_vector.x * self.kingpin_upper_inward_in,
+                inward_unit_vector.y * self.kingpin_upper_inward_in,
+                inward_unit_vector.z * self.kingpin_upper_inward_in,
+            ),
+        )
+
     def axle(self, lower_angle_rad: float) -> Point:
-        """Return the axle point at the supplied lower control-arm angle.
+        """Return the axle kingpin rotation point at the supplied arm angle.
 
         Returns:
             The axle point in inches.
 
         """
-        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
-        outer_projection_in = self.axle_offset_in * float(np.sin(theta_outer_horizon))
-        return self.lower_trunnion(lower_angle_rad) + Point(
-            -self.axle_offset_in * float(np.cos(theta_outer_horizon)),
-            outer_projection_in * self.caster_sin,
-            outer_projection_in * self.caster_cos,
+        lower_kingpin_point, upper_kingpin_point = self.kingpin_axis(
+            lower_angle_rad,
+        )
+        kingpin_vector = upper_kingpin_point - lower_kingpin_point
+        kingpin_length_in = abs(kingpin_vector)
+        return lower_kingpin_point + Point(
+            self.axle_offset_in * kingpin_vector.x / kingpin_length_in,
+            self.axle_offset_in * kingpin_vector.y / kingpin_length_in,
+            self.axle_offset_in * kingpin_vector.z / kingpin_length_in,
         )
 
-    def rotate_vector_about_upright(
+    def axle_direction(self, lower_angle_rad: float) -> Point:
+        """Return the unit axle direction from kingpin toward the wheel center.
+
+        Positive axle-to-kingpin angle drops the axle toward the lower end of
+        the kingpin, relative to a perpendicular axle.
+
+        Returns:
+            The outward axle unit vector.
+
+        """
+        lower_kingpin_point, upper_kingpin_point = self.kingpin_axis(
+            lower_angle_rad,
+        )
+        kingpin_vector = upper_kingpin_point - lower_kingpin_point
+        kingpin_length_in = abs(kingpin_vector)
+        kingpin_unit_vector = Point(
+            kingpin_vector.x / kingpin_length_in,
+            kingpin_vector.y / kingpin_length_in,
+            kingpin_vector.z / kingpin_length_in,
+        )
+        kingpin_plane_z_in = kingpin_vector.z / self.caster_cos
+        kingpin_plane_length_in = float(
+            np.hypot(kingpin_vector.x, kingpin_plane_z_in),
+        )
+        inward_unit_vector = Point(
+            -kingpin_plane_z_in / kingpin_plane_length_in,
+            kingpin_vector.x / kingpin_plane_length_in * self.caster_sin,
+            kingpin_vector.x / kingpin_plane_length_in * self.caster_cos,
+        )
+        axle_cos = float(np.cos(self.axle_kingpin_angle_rad))
+        axle_sin = float(np.sin(self.axle_kingpin_angle_rad))
+        return Point(
+            -inward_unit_vector.x * axle_cos - kingpin_unit_vector.x * axle_sin,
+            -inward_unit_vector.y * axle_cos - kingpin_unit_vector.y * axle_sin,
+            -inward_unit_vector.z * axle_cos - kingpin_unit_vector.z * axle_sin,
+        )
+
+    def rotate_vector_about_kingpin(
         self,
         vector: Point,
         lower_angle_rad: float,
         toe_angle_rad: float,
     ) -> Point:
-        """Rotate a vector about the lower-to-upper trunnion axis.
+        """Rotate a vector about the lower-to-upper kingpin axis.
 
-        Positive toe is a negative right-hand rotation around the upright so that
+        Positive toe is a negative right-hand rotation around the kingpin so that
         the wheel moves toward negative longitudinal position.
 
         Returns:
             The toe-rotated vector.
 
         """
-        lower_trunnion_point = self.lower_trunnion(lower_angle_rad)
-        upright_vector = self.upper_trunnion(lower_angle_rad) - lower_trunnion_point
-        upright_length_in = abs(upright_vector)
-        upright_unit_x = upright_vector.x / upright_length_in
-        upright_unit_y = upright_vector.y / upright_length_in
-        upright_unit_z = upright_vector.z / upright_length_in
+        lower_kingpin_point, upper_kingpin_point = self.kingpin_axis(
+            lower_angle_rad,
+        )
+        kingpin_vector = upper_kingpin_point - lower_kingpin_point
+        kingpin_length_in = abs(kingpin_vector)
+        kingpin_unit_x = kingpin_vector.x / kingpin_length_in
+        kingpin_unit_y = kingpin_vector.y / kingpin_length_in
+        kingpin_unit_z = kingpin_vector.z / kingpin_length_in
         toe_cos = float(np.cos(-toe_angle_rad))
         toe_sin = float(np.sin(-toe_angle_rad))
-        upright_vector_dot_product = (
-            upright_unit_x * vector.x
-            + upright_unit_y * vector.y
-            + upright_unit_z * vector.z
+        kingpin_vector_dot_product = (
+            kingpin_unit_x * vector.x
+            + kingpin_unit_y * vector.y
+            + kingpin_unit_z * vector.z
         )
         return Point(
             vector.x * toe_cos
-            + (upright_unit_y * vector.z - upright_unit_z * vector.y) * toe_sin
-            + upright_unit_x * upright_vector_dot_product * (1.0 - toe_cos),
+            + (kingpin_unit_y * vector.z - kingpin_unit_z * vector.y) * toe_sin
+            + kingpin_unit_x * kingpin_vector_dot_product * (1.0 - toe_cos),
             vector.y * toe_cos
-            + (upright_unit_z * vector.x - upright_unit_x * vector.z) * toe_sin
-            + upright_unit_y * upright_vector_dot_product * (1.0 - toe_cos),
+            + (kingpin_unit_z * vector.x - kingpin_unit_x * vector.z) * toe_sin
+            + kingpin_unit_y * kingpin_vector_dot_product * (1.0 - toe_cos),
             vector.z * toe_cos
-            + (upright_unit_x * vector.y - upright_unit_y * vector.x) * toe_sin
-            + upright_unit_z * upright_vector_dot_product * (1.0 - toe_cos),
+            + (kingpin_unit_x * vector.y - kingpin_unit_y * vector.x) * toe_sin
+            + kingpin_unit_z * kingpin_vector_dot_product * (1.0 - toe_cos),
         )
 
     def wheel_center(self, lower_angle_rad: float, toe_angle_rad: float) -> Point:
@@ -235,14 +348,26 @@ class Geometry(NamedTuple):
             The wheel center point in inches.
 
         """
-        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
-        theta_axle_horizon = float(np.pi) / 2.0 - theta_outer_horizon
-        axle_projection_in = self.axle_offset_in * float(np.sin(theta_axle_horizon))
-        return self.axle(lower_angle_rad) + self.rotate_vector_about_upright(
+        wheel_axis_vector = self.wheel_axis(lower_angle_rad, toe_angle_rad)
+        return self.axle(lower_angle_rad) + Point(
+            self.axle_length_in * wheel_axis_vector.x,
+            self.axle_length_in * wheel_axis_vector.y,
+            self.axle_length_in * wheel_axis_vector.z,
+        )
+
+    def wheel_axis(self, lower_angle_rad: float, toe_angle_rad: float) -> Point:
+        """Return the unit axle direction after the steering rotation.
+
+        Returns:
+            The wheel-axis unit vector toward the wheel center.
+
+        """
+        axle_direction = self.axle_direction(lower_angle_rad)
+        return self.rotate_vector_about_kingpin(
             Point(
-                self.axle_length_in * float(np.cos(theta_axle_horizon)),
-                axle_projection_in * self.caster_sin,
-                axle_projection_in * self.caster_cos,
+                axle_direction.x,
+                axle_direction.y,
+                axle_direction.z,
             ),
             lower_angle_rad,
             toe_angle_rad,
@@ -255,25 +380,31 @@ class Geometry(NamedTuple):
             The wheel contact point in inches.
 
         """
-        theta_outer_horizon = self.outer_horizon_rad(lower_angle_rad)
-        return self.wheel_center(
-            lower_angle_rad,
-            toe_angle_rad,
-        ) + self.rotate_vector_about_upright(
-            Point(
-                self.wheel_radius_in * float(np.cos(theta_outer_horizon)),
-                0.0,
-                -self.wheel_radius_in * float(np.sin(theta_outer_horizon)),
-            ),
-            lower_angle_rad,
-            toe_angle_rad,
+        wheel_axis_vector = self.wheel_axis(lower_angle_rad, toe_angle_rad)
+        downward_axis_dot_product = -wheel_axis_vector.z
+        downward_in_wheel_plane = Point(
+            -downward_axis_dot_product * wheel_axis_vector.x,
+            -downward_axis_dot_product * wheel_axis_vector.y,
+            -1.0 - downward_axis_dot_product * wheel_axis_vector.z,
+        )
+        downward_in_wheel_plane_length_in = abs(downward_in_wheel_plane)
+        return self.wheel_center(lower_angle_rad, toe_angle_rad) + Point(
+            self.wheel_radius_in
+            * downward_in_wheel_plane.x
+            / downward_in_wheel_plane_length_in,
+            self.wheel_radius_in
+            * downward_in_wheel_plane.y
+            / downward_in_wheel_plane_length_in,
+            self.wheel_radius_in
+            * downward_in_wheel_plane.z
+            / downward_in_wheel_plane_length_in,
         )
 
     def tie_rod_point(self, lower_angle_rad: float, toe_angle_rad: float) -> Point:
         """Return the outer tie-rod point in the wheel-disc coordinate frame.
 
         The tie-rod point is inboard along the wheel spindle, upward along the
-        upright, and forward in the wheel-disc plane.
+        kingpin projected into the wheel-disc plane, and forward in that plane.
 
         Returns:
             The outer tie-rod point in inches.
@@ -286,20 +417,35 @@ class Geometry(NamedTuple):
         wheel_outward_unit_x = wheel_outward_vector.x / wheel_outward_length_in
         wheel_outward_unit_y = wheel_outward_vector.y / wheel_outward_length_in
         wheel_outward_unit_z = wheel_outward_vector.z / wheel_outward_length_in
-        upright_vector = self.upper_trunnion(lower_angle_rad) - self.lower_trunnion(
+        lower_kingpin_point, upper_kingpin_point = self.kingpin_axis(
             lower_angle_rad,
         )
-        upright_length_in = abs(upright_vector)
-        upright_unit_x = upright_vector.x / upright_length_in
-        upright_unit_y = upright_vector.y / upright_length_in
-        upright_unit_z = upright_vector.z / upright_length_in
+        kingpin_vector = upper_kingpin_point - lower_kingpin_point
+        kingpin_length_in = abs(kingpin_vector)
+        kingpin_unit_x = kingpin_vector.x / kingpin_length_in
+        kingpin_unit_y = kingpin_vector.y / kingpin_length_in
+        kingpin_unit_z = kingpin_vector.z / kingpin_length_in
+        kingpin_outward_dot_product = (
+            kingpin_unit_x * wheel_outward_unit_x
+            + kingpin_unit_y * wheel_outward_unit_y
+            + kingpin_unit_z * wheel_outward_unit_z
+        )
+        wheel_up_vector = Point(
+            kingpin_unit_x - kingpin_outward_dot_product * wheel_outward_unit_x,
+            kingpin_unit_y - kingpin_outward_dot_product * wheel_outward_unit_y,
+            kingpin_unit_z - kingpin_outward_dot_product * wheel_outward_unit_z,
+        )
+        wheel_up_length_in = abs(wheel_up_vector)
+        wheel_up_unit_x = wheel_up_vector.x / wheel_up_length_in
+        wheel_up_unit_y = wheel_up_vector.y / wheel_up_length_in
+        wheel_up_unit_z = wheel_up_vector.z / wheel_up_length_in
         wheel_forward_vector = Point(
-            wheel_outward_unit_y * upright_unit_z
-            - wheel_outward_unit_z * upright_unit_y,
-            wheel_outward_unit_z * upright_unit_x
-            - wheel_outward_unit_x * upright_unit_z,
-            wheel_outward_unit_x * upright_unit_y
-            - wheel_outward_unit_y * upright_unit_x,
+            wheel_outward_unit_y * wheel_up_unit_z
+            - wheel_outward_unit_z * wheel_up_unit_y,
+            wheel_outward_unit_z * wheel_up_unit_x
+            - wheel_outward_unit_x * wheel_up_unit_z,
+            wheel_outward_unit_x * wheel_up_unit_y
+            - wheel_outward_unit_y * wheel_up_unit_x,
         )
         wheel_forward_length_in = abs(wheel_forward_vector)
         wheel_forward_unit_x = wheel_forward_vector.x / wheel_forward_length_in
@@ -307,13 +453,13 @@ class Geometry(NamedTuple):
         wheel_forward_unit_z = wheel_forward_vector.z / wheel_forward_length_in
         return wheel_center_point + Point(
             -self.tie_rod_inward_in * wheel_outward_unit_x
-            + self.tie_rod_up_in * upright_unit_x
+            + self.tie_rod_up_in * wheel_up_unit_x
             + self.tie_rod_forward_in * wheel_forward_unit_x,
             -self.tie_rod_inward_in * wheel_outward_unit_y
-            + self.tie_rod_up_in * upright_unit_y
+            + self.tie_rod_up_in * wheel_up_unit_y
             + self.tie_rod_forward_in * wheel_forward_unit_y,
             -self.tie_rod_inward_in * wheel_outward_unit_z
-            + self.tie_rod_up_in * upright_unit_z
+            + self.tie_rod_up_in * wheel_up_unit_z
             + self.tie_rod_forward_in * wheel_forward_unit_z,
         )
 
