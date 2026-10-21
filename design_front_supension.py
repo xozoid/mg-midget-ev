@@ -21,8 +21,8 @@ if TYPE_CHECKING:
 
 TARGET_STATIC_CAMBER_MIN_DEG = -1.0
 TARGET_STATIC_CAMBER_MAX_DEG = -0.5
-TARGET_INITIAL_BUMP_CAMBER_GAIN_MIN_DEG = -0.7
-TARGET_INITIAL_BUMP_CAMBER_GAIN_MAX_DEG = -0.3
+TARGET_STATIC_CAMBER_SLOPE_MIN_DEG_PER_IN = -0.7
+TARGET_STATIC_CAMBER_SLOPE_MAX_DEG_PER_IN = -0.3
 TARGET_MAX_BUMP_CAMBER_DEG = 0.0
 TARGET_MAX_DROOP_CAMBER_DEG = 0.5
 TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 1.0
@@ -30,7 +30,7 @@ TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN = 5.0
 TARGET_WHEEL_CENTER_REST_X_IN = 22.984638682953
 WHEEL_CENTER_X_TOLERANCE_IN = 0.25
 CAMBER_ERROR_REFERENCE_DEG = 0.5
-INITIAL_BUMP_CAMBER_GAIN_ERROR_REFERENCE_DEG = 0.4
+STATIC_CAMBER_SLOPE_ERROR_REFERENCE_DEG_PER_IN = 0.4
 
 
 @dataclass(frozen=True)
@@ -39,8 +39,8 @@ class SuspensionTargetReport:
 
     static_camber_deg: float
     static_camber_distance_deg: float
-    initial_bump_camber_gain_deg: float
-    initial_bump_camber_gain_distance_deg: float
+    static_camber_slope_deg_per_in: float
+    static_camber_slope_distance_deg_per_in: float
     bump_camber_monotonicity_penalty_deg: float
     max_bump_camber_deg: float
     bump_camber_distance_deg: float
@@ -113,6 +113,42 @@ def _distance_to_range(value: float, minimum: float, maximum: float) -> float:
     return max(minimum - value, 0.0, value - maximum)
 
 
+def _slope_at_travel(
+    travel_in: Sequence[float],
+    values: Sequence[float],
+    target_travel_in: float,
+) -> float:
+    """Return the two-sided local slope at a sampled travel position.
+
+    Args:
+        travel_in: Suspension travel relative to rest, in inches.
+        values: Values sampled at ``travel_in``.
+        target_travel_in: Travel position at which to estimate the slope, in inches.
+
+    Returns:
+        Local change in ``values`` per inch of travel.
+
+    Raises:
+        ValueError: If samples do not bracket the requested travel position.
+
+    """
+    sorted_indices = np.argsort(travel_in)
+    sorted_travel_in = np.asarray(travel_in)[sorted_indices]
+    sorted_values = np.asarray(values)[sorted_indices]
+    lower_index = int(np.searchsorted(sorted_travel_in, target_travel_in, side="left"))
+    upper_index = int(np.searchsorted(sorted_travel_in, target_travel_in, side="right"))
+    if lower_index == 0 or upper_index == len(sorted_travel_in):
+        message = "Suspension samples do not bracket the requested travel position."
+        raise ValueError(message)
+
+    lower_travel_in = sorted_travel_in[lower_index - 1]
+    upper_travel_in = sorted_travel_in[upper_index]
+    return float(
+        (sorted_values[upper_index] - sorted_values[lower_index - 1])
+        / (upper_travel_in - lower_travel_in),
+    )
+
+
 def evaluate_suspension_targets(
     travel_in: Sequence[float],
     camber_deg: Sequence[float],
@@ -171,23 +207,20 @@ def evaluate_suspension_targets(
         right_turn_toe_peak_to_peak_deg,
         left_turn_toe_peak_to_peak_deg,
     )
-    initial_bump_camber_deg = float(
-        np.interp(
-            1.0,
-            np.asarray(travel_in)[travel_order],
-            np.asarray(camber_deg)[travel_order],
-        ),
+    static_camber_slope_deg_per_in = _slope_at_travel(
+        travel_in,
+        camber_deg,
+        0.0,
     )
-    initial_bump_camber_gain_deg = initial_bump_camber_deg - static_camber_deg
     static_camber_distance_deg = _distance_to_range(
         static_camber_deg,
         TARGET_STATIC_CAMBER_MIN_DEG,
         TARGET_STATIC_CAMBER_MAX_DEG,
     )
-    initial_bump_camber_gain_distance_deg = _distance_to_range(
-        initial_bump_camber_gain_deg,
-        TARGET_INITIAL_BUMP_CAMBER_GAIN_MIN_DEG,
-        TARGET_INITIAL_BUMP_CAMBER_GAIN_MAX_DEG,
+    static_camber_slope_distance_deg_per_in = _distance_to_range(
+        static_camber_slope_deg_per_in,
+        TARGET_STATIC_CAMBER_SLOPE_MIN_DEG_PER_IN,
+        TARGET_STATIC_CAMBER_SLOPE_MAX_DEG_PER_IN,
     )
     # NOTE: Cumulative positive change is stable when a monotonic curve is resampled.
     bump_camber_monotonicity_penalty_deg = float(
@@ -219,8 +252,8 @@ def evaluate_suspension_targets(
     )
     normalized_error = (
         static_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
-        + initial_bump_camber_gain_distance_deg
-        / INITIAL_BUMP_CAMBER_GAIN_ERROR_REFERENCE_DEG
+        + static_camber_slope_distance_deg_per_in
+        / STATIC_CAMBER_SLOPE_ERROR_REFERENCE_DEG_PER_IN
         + bump_camber_monotonicity_penalty_deg / CAMBER_ERROR_REFERENCE_DEG
         + bump_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
         + droop_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
@@ -232,8 +265,8 @@ def evaluate_suspension_targets(
     return SuspensionTargetReport(
         static_camber_deg=static_camber_deg,
         static_camber_distance_deg=static_camber_distance_deg,
-        initial_bump_camber_gain_deg=initial_bump_camber_gain_deg,
-        initial_bump_camber_gain_distance_deg=initial_bump_camber_gain_distance_deg,
+        static_camber_slope_deg_per_in=static_camber_slope_deg_per_in,
+        static_camber_slope_distance_deg_per_in=static_camber_slope_distance_deg_per_in,
         bump_camber_monotonicity_penalty_deg=bump_camber_monotonicity_penalty_deg,
         max_bump_camber_deg=max_bump_camber_deg,
         bump_camber_distance_deg=bump_camber_distance_deg,
@@ -255,8 +288,8 @@ def evaluate_suspension_targets(
 def print_suspension_target_report(report: SuspensionTargetReport) -> None:
     """Print a color-coded, compact target report for one design."""
     static_camber_passed = np.isclose(report.static_camber_distance_deg, 0.0)
-    initial_bump_camber_gain_passed = np.isclose(
-        report.initial_bump_camber_gain_distance_deg,
+    static_camber_slope_passed = np.isclose(
+        report.static_camber_slope_distance_deg_per_in,
         0.0,
     )
     bump_camber_monotonic_passed = np.isclose(
@@ -307,11 +340,11 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
     )
     print(
         status_line(
-            passed=initial_bump_camber_gain_passed,
-            text="Initial bump camber gain "
-            f"{report.initial_bump_camber_gain_deg:+.1f} deg "
-            f"(soft target {TARGET_INITIAL_BUMP_CAMBER_GAIN_MIN_DEG:+.1f} to "
-            f"{TARGET_INITIAL_BUMP_CAMBER_GAIN_MAX_DEG:+.1f} deg)",
+            passed=static_camber_slope_passed,
+            text="Camber slope at rest "
+            f"{report.static_camber_slope_deg_per_in:+.1f} deg/in "
+            f"(soft target {TARGET_STATIC_CAMBER_SLOPE_MIN_DEG_PER_IN:+.1f} to "
+            f"{TARGET_STATIC_CAMBER_SLOPE_MAX_DEG_PER_IN:+.1f} deg/in)",
         ),
     )
     print(
