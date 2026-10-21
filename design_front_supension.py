@@ -24,6 +24,7 @@ STATIC_CAMBER_TOLERANCE_DEG = 0.25
 TARGET_MAX_BUMP_CAMBER_DEG = 0.0
 TARGET_MAX_DROOP_CAMBER_DEG = 0.5
 TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 1.0
+TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN = 2.0
 TARGET_WHEEL_CENTER_REST_X_IN = 22.984638682953
 WHEEL_CENTER_X_TOLERANCE_IN = 0.25
 CAMBER_ERROR_REFERENCE_DEG = 0.5
@@ -44,6 +45,8 @@ class SuspensionTargetReport:
     left_turn_toe_peak_to_peak_deg: float
     max_toe_peak_to_peak_deg: float
     toe_peak_to_peak_distance_deg: float
+    roll_center_peak_to_peak_in: float
+    roll_center_peak_to_peak_distance_in: float
     wheel_center_rest_x_in: float
     wheel_center_x_distance_in: float
     aggregate_score_pct: float
@@ -95,6 +98,7 @@ def evaluate_suspension_targets(
     straight_toe_deg: Sequence[float],
     right_turn_toe_deg: Sequence[float],
     left_turn_toe_deg: Sequence[float],
+    roll_center_heights_in: Sequence[float],
     wheel_center_rest_x_in: float,
 ) -> SuspensionTargetReport:
     """Evaluate the front-suspension camber and bump-steer targets.
@@ -109,6 +113,7 @@ def evaluate_suspension_targets(
         straight_toe_deg: Straight-ahead toe angles sampled at ``travel_in``.
         right_turn_toe_deg: Right-turn toe angles sampled at ``travel_in``.
         left_turn_toe_deg: Left-turn toe angles sampled at ``travel_in``.
+        roll_center_heights_in: Roll-center heights above ground at ``travel_in``.
         wheel_center_rest_x_in: Wheel-center lateral position at rest, in inches.
 
     Returns:
@@ -161,6 +166,11 @@ def evaluate_suspension_targets(
         0.0,
         max_toe_peak_to_peak_deg - TARGET_MAX_TOE_PEAK_TO_PEAK_DEG,
     )
+    roll_center_peak_to_peak_in = float(np.ptp(roll_center_heights_in))
+    roll_center_peak_to_peak_distance_in = max(
+        0.0,
+        roll_center_peak_to_peak_in - TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN,
+    )
     wheel_center_x_distance_in = abs(
         wheel_center_rest_x_in - TARGET_WHEEL_CENTER_REST_X_IN,
     )
@@ -173,8 +183,9 @@ def evaluate_suspension_targets(
         + bump_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
         + droop_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
         + toe_peak_to_peak_distance_deg / TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
+        + roll_center_peak_to_peak_distance_in / TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
         + wheel_center_x_excess_in / WHEEL_CENTER_X_TOLERANCE_IN
-    ) / 5.0
+    ) / 6.0
 
     return SuspensionTargetReport(
         static_camber_deg=static_camber_deg,
@@ -188,6 +199,8 @@ def evaluate_suspension_targets(
         left_turn_toe_peak_to_peak_deg=left_turn_toe_peak_to_peak_deg,
         max_toe_peak_to_peak_deg=max_toe_peak_to_peak_deg,
         toe_peak_to_peak_distance_deg=toe_peak_to_peak_distance_deg,
+        roll_center_peak_to_peak_in=roll_center_peak_to_peak_in,
+        roll_center_peak_to_peak_distance_in=roll_center_peak_to_peak_distance_in,
         wheel_center_rest_x_in=wheel_center_rest_x_in,
         wheel_center_x_distance_in=wheel_center_x_distance_in,
         aggregate_score_pct=100.0 / (1.0 + normalized_error),
@@ -200,6 +213,9 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
     bump_camber_passed = report.max_bump_camber_deg < TARGET_MAX_BUMP_CAMBER_DEG
     droop_camber_passed = report.max_droop_camber_deg < TARGET_MAX_DROOP_CAMBER_DEG
     toe_passed = report.max_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
+    roll_center_passed = (
+        report.roll_center_peak_to_peak_in < TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
+    )
     wheel_center_passed = (
         report.wheel_center_x_distance_in <= WHEEL_CENTER_X_TOLERANCE_IN
     )
@@ -209,6 +225,7 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
             bump_camber_passed,
             droop_camber_passed,
             toe_passed,
+            roll_center_passed,
             wheel_center_passed,
         ),
     )
@@ -261,6 +278,15 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
             f"left {report.left_turn_toe_peak_to_peak_deg:.1f} deg "
             f"(limit {TARGET_MAX_TOE_PEAK_TO_PEAK_DEG:.1f} deg, "
             f"off {report.toe_peak_to_peak_distance_deg:.1f} deg)",
+        ),
+    )
+    print(
+        status_line(
+            passed=roll_center_passed,
+            text="Roll-center P2P "
+            f"{report.roll_center_peak_to_peak_in:.1f} in "
+            f"(limit {TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN:.1f} in, "
+            f"off {report.roll_center_peak_to_peak_distance_in:.1f} in)",
         ),
     )
     print(
@@ -1186,11 +1212,12 @@ def main() -> int:
 
     """
     geometry = Geometry(
-        lower_in=11.25,
-        upper_in=7.75,
-        inner_in=8.25,
-        inner_angle_rad=float(np.deg2rad(-29)),
-        steering_rod_y_in=-5.0,
+        lower_in=11.21813684,
+        upper_in=6.85853975,
+        inner_in=9.3297941,
+        inner_angle_rad=float(np.deg2rad(-31.55241894)),
+        steering_rod_y_in=-4.74654607,
+        steering_rod_z_in=5.41529298,
     )
     lower_angles_rad = np.deg2rad(np.linspace(-5.0, 5.0, 11))
     plot_four_bar_and_kingpin_axis(
@@ -1382,6 +1409,15 @@ def main() -> int:
             strict=True,
         )
     ]
+    roll_center_heights_in = [
+        geometry.roll_center(lower_angle_rad, toe_angle_rad).z
+        - geometry.wheel_contact(lower_angle_rad, toe_angle_rad).z
+        for lower_angle_rad, toe_angle_rad in zip(
+            metric_lower_angles_rad,
+            metric_toe_angles_rad,
+            strict=True,
+        )
+    ]
     suspension_target_report = evaluate_suspension_targets(
         travel_in,
         camber_deg,
@@ -1402,6 +1438,7 @@ def main() -> int:
                 toe_angle_left_turn_max_bump_rad,
             )
         ],
+        roll_center_heights_in,
         geometry.wheel_center(lower_angle_rest_rad, toe_angle_rest_rad).x,
     )
     print_suspension_target_report(suspension_target_report)
