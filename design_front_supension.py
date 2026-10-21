@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from itertools import starmap
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
+from colorama import Fore, Style
 from matplotlib.patches import Ellipse
 from scipy.optimize import root_scalar
 
@@ -15,6 +17,228 @@ from mg.front_suspension import Geometry, Point
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+TARGET_STATIC_CAMBER_DEG = -0.5
+TARGET_MAX_BUMP_CAMBER_DEG = 0.0
+TARGET_MAX_DROOP_CAMBER_DEG = 0.5
+TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 1.0
+CAMBER_ERROR_REFERENCE_DEG = 0.5
+
+
+@dataclass(frozen=True)
+class SuspensionTargetReport:
+    """Measured suspension targets, their constraint violations, and score."""
+
+    static_camber_deg: float
+    static_camber_distance_deg: float
+    max_bump_camber_deg: float
+    bump_camber_distance_deg: float
+    max_droop_camber_deg: float
+    droop_camber_distance_deg: float
+    straight_toe_peak_to_peak_deg: float
+    right_turn_toe_peak_to_peak_deg: float
+    left_turn_toe_peak_to_peak_deg: float
+    max_toe_peak_to_peak_deg: float
+    toe_peak_to_peak_distance_deg: float
+    aggregate_score_pct: float
+
+
+def _values_between_travel_limits(
+    travel_in: Sequence[float],
+    values: Sequence[float],
+    travel_min_in: float,
+    travel_max_in: float,
+) -> np.ndarray:
+    """Return values in a travel interval, including interpolated endpoints.
+
+    Args:
+        travel_in: Suspension travel relative to rest, in inches.
+        values: Values sampled at ``travel_in``.
+        travel_min_in: Inclusive lower travel boundary, in inches.
+        travel_max_in: Inclusive upper travel boundary, in inches.
+
+    Returns:
+        Values in the requested interval.
+
+    Raises:
+        ValueError: If the samples do not cover the requested travel interval.
+
+    """
+    sorted_indices = np.argsort(travel_in)
+    sorted_travel_in = np.asarray(travel_in)[sorted_indices]
+    sorted_values = np.asarray(values)[sorted_indices]
+    if sorted_travel_in[0] > travel_min_in or sorted_travel_in[-1] < travel_max_in:
+        message = "Suspension samples do not cover the requested travel interval."
+        raise ValueError(message)
+
+    interval_values = sorted_values[
+        (sorted_travel_in >= travel_min_in) & (sorted_travel_in <= travel_max_in)
+    ]
+    return np.concatenate(
+        (
+            [np.interp(travel_min_in, sorted_travel_in, sorted_values)],
+            interval_values,
+            [np.interp(travel_max_in, sorted_travel_in, sorted_values)],
+        ),
+    )
+
+
+def evaluate_suspension_targets(
+    travel_in: Sequence[float],
+    camber_deg: Sequence[float],
+    straight_toe_deg: Sequence[float],
+    right_turn_toe_deg: Sequence[float],
+    left_turn_toe_deg: Sequence[float],
+) -> SuspensionTargetReport:
+    """Evaluate the front-suspension camber and bump-steer targets.
+
+    Positive travel is bump and negative travel is droop. Constraint distances
+    are zero when their target is met and otherwise report the amount by which
+    the constraint is exceeded.
+
+    Args:
+        travel_in: Suspension travel relative to rest, in inches.
+        camber_deg: Camber angles sampled at ``travel_in``.
+        straight_toe_deg: Straight-ahead toe angles sampled at ``travel_in``.
+        right_turn_toe_deg: Right-turn toe angles sampled at ``travel_in``.
+        left_turn_toe_deg: Left-turn toe angles sampled at ``travel_in``.
+
+    Returns:
+        Measured targets, constraint distances, and an aggregate score.
+
+    """
+    travel_order = np.argsort(travel_in)
+    static_camber_deg = float(
+        np.interp(
+            0.0,
+            np.asarray(travel_in)[travel_order],
+            np.asarray(camber_deg)[travel_order],
+        ),
+    )
+    bump_camber_deg = _values_between_travel_limits(
+        travel_in,
+        camber_deg,
+        0.0,
+        2.0,
+    )
+    droop_camber_deg = _values_between_travel_limits(
+        travel_in,
+        camber_deg,
+        -2.0,
+        0.0,
+    )
+    max_bump_camber_deg = float(np.max(bump_camber_deg))
+    max_droop_camber_deg = float(np.max(droop_camber_deg))
+    straight_toe_peak_to_peak_deg = float(np.ptp(straight_toe_deg))
+    right_turn_toe_peak_to_peak_deg = float(np.ptp(right_turn_toe_deg))
+    left_turn_toe_peak_to_peak_deg = float(np.ptp(left_turn_toe_deg))
+    max_toe_peak_to_peak_deg = max(
+        straight_toe_peak_to_peak_deg,
+        right_turn_toe_peak_to_peak_deg,
+        left_turn_toe_peak_to_peak_deg,
+    )
+    static_camber_distance_deg = abs(static_camber_deg - TARGET_STATIC_CAMBER_DEG)
+    bump_camber_distance_deg = max(
+        0.0,
+        max_bump_camber_deg - TARGET_MAX_BUMP_CAMBER_DEG,
+    )
+    droop_camber_distance_deg = max(
+        0.0,
+        max_droop_camber_deg - TARGET_MAX_DROOP_CAMBER_DEG,
+    )
+    toe_peak_to_peak_distance_deg = max(
+        0.0,
+        max_toe_peak_to_peak_deg - TARGET_MAX_TOE_PEAK_TO_PEAK_DEG,
+    )
+    normalized_error = (
+        static_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
+        + bump_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
+        + droop_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
+        + toe_peak_to_peak_distance_deg / TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
+    ) / 4.0
+
+    return SuspensionTargetReport(
+        static_camber_deg=static_camber_deg,
+        static_camber_distance_deg=static_camber_distance_deg,
+        max_bump_camber_deg=max_bump_camber_deg,
+        bump_camber_distance_deg=bump_camber_distance_deg,
+        max_droop_camber_deg=max_droop_camber_deg,
+        droop_camber_distance_deg=droop_camber_distance_deg,
+        straight_toe_peak_to_peak_deg=straight_toe_peak_to_peak_deg,
+        right_turn_toe_peak_to_peak_deg=right_turn_toe_peak_to_peak_deg,
+        left_turn_toe_peak_to_peak_deg=left_turn_toe_peak_to_peak_deg,
+        max_toe_peak_to_peak_deg=max_toe_peak_to_peak_deg,
+        toe_peak_to_peak_distance_deg=toe_peak_to_peak_distance_deg,
+        aggregate_score_pct=100.0 / (1.0 + normalized_error),
+    )
+
+
+def print_suspension_target_report(report: SuspensionTargetReport) -> None:
+    """Print a color-coded, compact target report for one design."""
+    static_camber_passed = np.isclose(report.static_camber_distance_deg, 0.0)
+    bump_camber_passed = report.max_bump_camber_deg < TARGET_MAX_BUMP_CAMBER_DEG
+    droop_camber_passed = report.max_droop_camber_deg < TARGET_MAX_DROOP_CAMBER_DEG
+    toe_passed = report.max_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
+    design_passed = all(
+        (static_camber_passed, bump_camber_passed, droop_camber_passed, toe_passed),
+    )
+
+    def status_line(*, passed: bool, text: str) -> str:
+        """Return a red or green status line for terminal output.
+
+        Returns:
+            A terminal line with a colorama status color.
+
+        """
+        color = Fore.GREEN if passed else Fore.RED
+        label = "PASS" if passed else "FAIL"
+        return f"{color}[{label}] {text}{Style.RESET_ALL}"
+
+    print("\n=== FRONT SUSPENSION ===")
+    print(
+        status_line(
+            passed=static_camber_passed,
+            text="Static camber "
+            f"{report.static_camber_deg:+.1f} deg "
+            f"(target {TARGET_STATIC_CAMBER_DEG:+.1f} deg, "
+            f"off {report.static_camber_distance_deg:.1f} deg)",
+        ),
+    )
+    print(
+        status_line(
+            passed=bump_camber_passed,
+            text="Bump camber "
+            f"{report.max_bump_camber_deg:+.1f} deg through +2.0 in "
+            f"(must be negative, off {report.bump_camber_distance_deg:.1f} deg)",
+        ),
+    )
+    print(
+        status_line(
+            passed=droop_camber_passed,
+            text="Droop camber "
+            f"{report.max_droop_camber_deg:+.1f} deg through -2.0 in "
+            f"(limit {TARGET_MAX_DROOP_CAMBER_DEG:+.1f} deg, "
+            f"off {report.droop_camber_distance_deg:.1f} deg)",
+        ),
+    )
+    print(
+        status_line(
+            passed=toe_passed,
+            text="Toe P2P "
+            f"straight {report.straight_toe_peak_to_peak_deg:.1f} deg, "
+            f"right {report.right_turn_toe_peak_to_peak_deg:.1f} deg, "
+            f"left {report.left_turn_toe_peak_to_peak_deg:.1f} deg "
+            f"(limit {TARGET_MAX_TOE_PEAK_TO_PEAK_DEG:.1f} deg, "
+            f"off {report.toe_peak_to_peak_distance_deg:.1f} deg)",
+        ),
+    )
+    print(
+        status_line(
+            passed=design_passed,
+            text=f"SCORE {report.aggregate_score_pct:.1f}%",
+        ),
+    )
 
 
 def plot_four_bar_and_kingpin_axis(
@@ -957,7 +1181,7 @@ def main() -> int:
         toe_angle_rest_rad,
     ).x
     steering_rod_length_rest_in = 2.0 * steering_rod_link_point_rest_x_in
-    print(f"Resting steering rod length: {steering_rod_length_rest_in:.3f} in")
+    print(f"Resting steering rod length: {steering_rod_length_rest_in:.1f} in")
     toe_angle_right_turn_rest_rad = toe_angle_rest_rad + float(np.deg2rad(5.0))
     toe_angle_left_turn_rest_rad = toe_angle_rest_rad - float(np.deg2rad(5.0))
     constrained_lower_angles_rad = []
@@ -1042,6 +1266,18 @@ def main() -> int:
         )
         for lower_angle_rad in lower_angles_rad
     ]
+    toe_angle_right_turn_max_bump_rad = toe_angle_for_fixed_steering_rod_point(
+        geometry,
+        lower_angle_max_bump_rad,
+        steering_rod_link_point_right_turn_rest_x_in,
+        toe_angle_right_turn_rest_rad,
+    )
+    toe_angle_right_turn_max_drop_rad = toe_angle_for_fixed_steering_rod_point(
+        geometry,
+        lower_angle_max_drop_rad,
+        steering_rod_link_point_right_turn_rest_x_in,
+        toe_angle_right_turn_rest_rad,
+    )
     steering_rod_link_point_left_turn_rest_x_in = geometry.steering_rod_link_point(
         lower_angle_rest_rad,
         toe_angle_left_turn_rest_rad,
@@ -1055,6 +1291,74 @@ def main() -> int:
         )
         for lower_angle_rad in lower_angles_rad
     ]
+    toe_angle_left_turn_max_bump_rad = toe_angle_for_fixed_steering_rod_point(
+        geometry,
+        lower_angle_max_bump_rad,
+        steering_rod_link_point_left_turn_rest_x_in,
+        toe_angle_left_turn_rest_rad,
+    )
+    toe_angle_left_turn_max_drop_rad = toe_angle_for_fixed_steering_rod_point(
+        geometry,
+        lower_angle_max_drop_rad,
+        steering_rod_link_point_left_turn_rest_x_in,
+        toe_angle_left_turn_rest_rad,
+    )
+    travel_in = [
+        -2.0,
+        *(
+            ride_height_rest_in - ride_height_in
+            for ride_height_in in constrained_ride_heights_in
+            if ride_height_max_bump_in <= ride_height_in <= ride_height_max_drop_in
+        ),
+        2.0,
+    ]
+    metric_lower_angles_rad = [
+        lower_angle_max_drop_rad,
+        *lower_angles_rad,
+        lower_angle_max_bump_rad,
+    ]
+    metric_toe_angles_rad = [
+        toe_angle_max_drop_rad,
+        *toe_angles_rad,
+        toe_angle_max_bump_rad,
+    ]
+    camber_deg = [
+        float(
+            -np.rad2deg(
+                np.arctan2(
+                    geometry.wheel_axis(lower_angle_rad, toe_angle_rad).z,
+                    geometry.wheel_axis(lower_angle_rad, toe_angle_rad).x,
+                ),
+            ),
+        )
+        for lower_angle_rad, toe_angle_rad in zip(
+            metric_lower_angles_rad,
+            metric_toe_angles_rad,
+            strict=True,
+        )
+    ]
+    suspension_target_report = evaluate_suspension_targets(
+        travel_in,
+        camber_deg,
+        [float(np.rad2deg(toe_angle_rad)) for toe_angle_rad in metric_toe_angles_rad],
+        [
+            float(np.rad2deg(toe_angle_rad))
+            for toe_angle_rad in (
+                toe_angle_right_turn_max_drop_rad,
+                *toe_angles_right_turn_rad,
+                toe_angle_right_turn_max_bump_rad,
+            )
+        ],
+        [
+            float(np.rad2deg(toe_angle_rad))
+            for toe_angle_rad in (
+                toe_angle_left_turn_max_drop_rad,
+                *toe_angles_left_turn_rad,
+                toe_angle_left_turn_max_bump_rad,
+            )
+        ],
+    )
+    print_suspension_target_report(suspension_target_report)
     plot_xz(
         geometry,
         lower_angles_rad,
