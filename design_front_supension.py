@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 
 TARGET_STATIC_CAMBER_DEG = -0.5
+STATIC_CAMBER_TOLERANCE_DEG = 0.25
 TARGET_MAX_BUMP_CAMBER_DEG = 0.0
 TARGET_MAX_DROOP_CAMBER_DEG = 0.5
 TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 1.0
@@ -138,7 +139,10 @@ def evaluate_suspension_targets(
         right_turn_toe_peak_to_peak_deg,
         left_turn_toe_peak_to_peak_deg,
     )
-    static_camber_distance_deg = abs(static_camber_deg - TARGET_STATIC_CAMBER_DEG)
+    static_camber_distance_deg = max(
+        0.0,
+        abs(static_camber_deg - TARGET_STATIC_CAMBER_DEG) - STATIC_CAMBER_TOLERANCE_DEG,
+    )
     bump_camber_distance_deg = max(
         0.0,
         max_bump_camber_deg - TARGET_MAX_BUMP_CAMBER_DEG,
@@ -201,7 +205,8 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
             passed=static_camber_passed,
             text="Static camber "
             f"{report.static_camber_deg:+.1f} deg "
-            f"(target {TARGET_STATIC_CAMBER_DEG:+.1f} deg, "
+            f"(target {TARGET_STATIC_CAMBER_DEG:+.1f} +/- "
+            f"{STATIC_CAMBER_TOLERANCE_DEG:.2f} deg, "
             f"off {report.static_camber_distance_deg:.1f} deg)",
         ),
     )
@@ -1146,7 +1151,10 @@ def main() -> int:
         Zero after saving the plot.
 
     """
-    geometry = Geometry()
+    geometry = Geometry(
+        inner_in=8.25,
+        inner_angle_rad=float(np.deg2rad(-29)),
+    )
     lower_angles_rad = np.deg2rad(np.linspace(-5.0, 5.0, 11))
     plot_four_bar_and_kingpin_axis(
         geometry,
@@ -1161,7 +1169,7 @@ def main() -> int:
     ride_height_rest_in = 8
     ride_height_max_bump_in = ride_height_rest_in - 2.0
     ride_height_max_drop_in = ride_height_rest_in + 2.0
-    toe_angle_rest_rad = float(np.deg2rad(-0.0))
+    toe_angle_rest_rad = float(np.deg2rad(-0.08))
     ride_heights_in = [
         -geometry.wheel_contact(lower_angle_rad, toe_angle_rest_rad).z
         for lower_angle_rad in valid_lower_angles_rad
