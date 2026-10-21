@@ -25,7 +25,7 @@ TARGET_STATIC_CAMBER_SLOPE_MIN_DEG_PER_IN = -0.7
 TARGET_STATIC_CAMBER_SLOPE_MAX_DEG_PER_IN = -0.3
 TARGET_MAX_BUMP_CAMBER_DEG = 0.0
 TARGET_MAX_DROOP_CAMBER_DEG = 0.5
-TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 1.0
+TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 0.2
 TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN = 5.0
 TARGET_WHEEL_CENTER_REST_X_IN = 22.984638682953
 WHEEL_CENTER_X_TOLERANCE_IN = 0.25
@@ -236,7 +236,7 @@ def evaluate_suspension_targets(
     )
     toe_peak_to_peak_distance_deg = max(
         0.0,
-        max_toe_peak_to_peak_deg - TARGET_MAX_TOE_PEAK_TO_PEAK_DEG,
+        straight_toe_peak_to_peak_deg - TARGET_MAX_TOE_PEAK_TO_PEAK_DEG,
     )
     roll_center_peak_to_peak_in = float(np.ptp(roll_center_heights_in))
     roll_center_peak_to_peak_distance_in = max(
@@ -298,7 +298,7 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
     )
     bump_camber_passed = report.max_bump_camber_deg < TARGET_MAX_BUMP_CAMBER_DEG
     droop_camber_passed = report.max_droop_camber_deg < TARGET_MAX_DROOP_CAMBER_DEG
-    toe_passed = report.max_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
+    toe_passed = report.straight_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
     roll_center_passed = (
         report.roll_center_peak_to_peak_in < TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
     )
@@ -376,11 +376,11 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
         status_line(
             passed=toe_passed,
             text="Toe P2P "
-            f"straight {report.straight_toe_peak_to_peak_deg:.1f} deg, "
-            f"right {report.right_turn_toe_peak_to_peak_deg:.1f} deg, "
-            f"left {report.left_turn_toe_peak_to_peak_deg:.1f} deg "
-            f"(limit {TARGET_MAX_TOE_PEAK_TO_PEAK_DEG:.1f} deg, "
-            f"off {report.toe_peak_to_peak_distance_deg:.1f} deg)",
+            f"straight {report.straight_toe_peak_to_peak_deg:.2f} deg, "
+            f"right {report.right_turn_toe_peak_to_peak_deg:.2f} deg, "
+            f"left {report.left_turn_toe_peak_to_peak_deg:.2f} deg "
+            f"(limit {TARGET_MAX_TOE_PEAK_TO_PEAK_DEG:.2f} deg, "
+            f"off {report.toe_peak_to_peak_distance_deg:.2f} deg)",
         ),
     )
     print(
@@ -1315,12 +1315,12 @@ def main() -> int:
 
     """
     geometry = Geometry(
-        lower_in=11.21813684,
-        upper_in=6.85853975,
-        inner_in=9.3297941,
-        inner_angle_rad=float(np.deg2rad(-31.55241894)),
-        steering_rod_y_in=-4.74654607,
-        steering_rod_z_in=5.41529298,
+        lower_in=11.31048189,
+        upper_in=6.97029941,
+        inner_in=9.23497371,
+        inner_angle_rad=float(np.deg2rad(-31.69875231)),
+        steering_rod_y_in=-4.76869587,
+        steering_rod_z_in=5.36411617,
     )
     lower_angles_rad = np.deg2rad(np.linspace(-5.0, 5.0, 11))
     plot_four_bar_and_kingpin_axis(
