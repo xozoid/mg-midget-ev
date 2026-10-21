@@ -19,15 +19,18 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-TARGET_STATIC_CAMBER_DEG = -0.5
-STATIC_CAMBER_TOLERANCE_DEG = 0.25
+TARGET_STATIC_CAMBER_MIN_DEG = -1.0
+TARGET_STATIC_CAMBER_MAX_DEG = -0.5
+TARGET_INITIAL_BUMP_CAMBER_GAIN_MIN_DEG = -0.7
+TARGET_INITIAL_BUMP_CAMBER_GAIN_MAX_DEG = -0.3
 TARGET_MAX_BUMP_CAMBER_DEG = 0.0
 TARGET_MAX_DROOP_CAMBER_DEG = 0.5
 TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 1.0
-TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN = 2.0
+TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN = 5.0
 TARGET_WHEEL_CENTER_REST_X_IN = 22.984638682953
 WHEEL_CENTER_X_TOLERANCE_IN = 0.25
 CAMBER_ERROR_REFERENCE_DEG = 0.5
+INITIAL_BUMP_CAMBER_GAIN_ERROR_REFERENCE_DEG = 0.4
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,9 @@ class SuspensionTargetReport:
 
     static_camber_deg: float
     static_camber_distance_deg: float
+    initial_bump_camber_gain_deg: float
+    initial_bump_camber_gain_distance_deg: float
+    bump_camber_monotonicity_penalty_deg: float
     max_bump_camber_deg: float
     bump_camber_distance_deg: float
     max_droop_camber_deg: float
@@ -90,6 +96,21 @@ def _values_between_travel_limits(
             [np.interp(travel_max_in, sorted_travel_in, sorted_values)],
         ),
     )
+
+
+def _distance_to_range(value: float, minimum: float, maximum: float) -> float:
+    """Return the shortest distance from a value to an inclusive range.
+
+    Args:
+        value: Value to compare with the range.
+        minimum: Inclusive lower limit.
+        maximum: Inclusive upper limit.
+
+    Returns:
+        Zero inside the range, otherwise the amount outside it.
+
+    """
+    return max(minimum - value, 0.0, value - maximum)
 
 
 def evaluate_suspension_targets(
@@ -150,9 +171,27 @@ def evaluate_suspension_targets(
         right_turn_toe_peak_to_peak_deg,
         left_turn_toe_peak_to_peak_deg,
     )
-    static_camber_distance_deg = max(
-        0.0,
-        abs(static_camber_deg - TARGET_STATIC_CAMBER_DEG) - STATIC_CAMBER_TOLERANCE_DEG,
+    initial_bump_camber_deg = float(
+        np.interp(
+            1.0,
+            np.asarray(travel_in)[travel_order],
+            np.asarray(camber_deg)[travel_order],
+        ),
+    )
+    initial_bump_camber_gain_deg = initial_bump_camber_deg - static_camber_deg
+    static_camber_distance_deg = _distance_to_range(
+        static_camber_deg,
+        TARGET_STATIC_CAMBER_MIN_DEG,
+        TARGET_STATIC_CAMBER_MAX_DEG,
+    )
+    initial_bump_camber_gain_distance_deg = _distance_to_range(
+        initial_bump_camber_gain_deg,
+        TARGET_INITIAL_BUMP_CAMBER_GAIN_MIN_DEG,
+        TARGET_INITIAL_BUMP_CAMBER_GAIN_MAX_DEG,
+    )
+    # NOTE: Cumulative positive change is stable when a monotonic curve is resampled.
+    bump_camber_monotonicity_penalty_deg = float(
+        np.sum(np.maximum(0.0, np.diff(bump_camber_deg))),
     )
     bump_camber_distance_deg = max(
         0.0,
@@ -180,16 +219,22 @@ def evaluate_suspension_targets(
     )
     normalized_error = (
         static_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
+        + initial_bump_camber_gain_distance_deg
+        / INITIAL_BUMP_CAMBER_GAIN_ERROR_REFERENCE_DEG
+        + bump_camber_monotonicity_penalty_deg / CAMBER_ERROR_REFERENCE_DEG
         + bump_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
         + droop_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
         + toe_peak_to_peak_distance_deg / TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
         + roll_center_peak_to_peak_distance_in / TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
         + wheel_center_x_excess_in / WHEEL_CENTER_X_TOLERANCE_IN
-    ) / 6.0
+    ) / 8.0
 
     return SuspensionTargetReport(
         static_camber_deg=static_camber_deg,
         static_camber_distance_deg=static_camber_distance_deg,
+        initial_bump_camber_gain_deg=initial_bump_camber_gain_deg,
+        initial_bump_camber_gain_distance_deg=initial_bump_camber_gain_distance_deg,
+        bump_camber_monotonicity_penalty_deg=bump_camber_monotonicity_penalty_deg,
         max_bump_camber_deg=max_bump_camber_deg,
         bump_camber_distance_deg=bump_camber_distance_deg,
         max_droop_camber_deg=max_droop_camber_deg,
@@ -210,6 +255,14 @@ def evaluate_suspension_targets(
 def print_suspension_target_report(report: SuspensionTargetReport) -> None:
     """Print a color-coded, compact target report for one design."""
     static_camber_passed = np.isclose(report.static_camber_distance_deg, 0.0)
+    initial_bump_camber_gain_passed = np.isclose(
+        report.initial_bump_camber_gain_distance_deg,
+        0.0,
+    )
+    bump_camber_monotonic_passed = np.isclose(
+        report.bump_camber_monotonicity_penalty_deg,
+        0.0,
+    )
     bump_camber_passed = report.max_bump_camber_deg < TARGET_MAX_BUMP_CAMBER_DEG
     droop_camber_passed = report.max_droop_camber_deg < TARGET_MAX_DROOP_CAMBER_DEG
     toe_passed = report.max_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
@@ -247,9 +300,26 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
             passed=static_camber_passed,
             text="Static camber "
             f"{report.static_camber_deg:+.1f} deg "
-            f"(target {TARGET_STATIC_CAMBER_DEG:+.1f} +/- "
-            f"{STATIC_CAMBER_TOLERANCE_DEG:.2f} deg, "
+            f"(target {TARGET_STATIC_CAMBER_MIN_DEG:+.1f} to "
+            f"{TARGET_STATIC_CAMBER_MAX_DEG:+.1f} deg, "
             f"off {report.static_camber_distance_deg:.1f} deg)",
+        ),
+    )
+    print(
+        status_line(
+            passed=initial_bump_camber_gain_passed,
+            text="Initial bump camber gain "
+            f"{report.initial_bump_camber_gain_deg:+.1f} deg "
+            f"(soft target {TARGET_INITIAL_BUMP_CAMBER_GAIN_MIN_DEG:+.1f} to "
+            f"{TARGET_INITIAL_BUMP_CAMBER_GAIN_MAX_DEG:+.1f} deg)",
+        ),
+    )
+    print(
+        status_line(
+            passed=bump_camber_monotonic_passed,
+            text="Bump camber monotonicity "
+            f"{report.bump_camber_monotonicity_penalty_deg:.1f} deg regression "
+            "(soft target 0.0 deg)",
         ),
     )
     print(
