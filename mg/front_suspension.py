@@ -88,6 +88,14 @@ class Geometry(NamedTuple):
     steering_rod_y_in: float = -4.5
     steering_rod_z_in: float = 5
 
+    coilover_lower_offset_in: float = 10.75 * 2.0 / 3.0
+    coilover_upper_x_from_lower_pickup_in: float = float(
+        -9.0 * np.sin(np.deg2rad(-31.5)) + 3.0,
+    )
+    coilover_upper_z_from_lower_pickup_in: float = float(
+        9.0 * np.cos(np.deg2rad(-31.5)) * np.cos(np.deg2rad(3.0)) + 4.0,
+    )
+
     @property
     def caster_cos(self) -> float:
         """Cosine of the kingpin caster angle."""
@@ -153,6 +161,71 @@ class Geometry(NamedTuple):
             outer_projection_in * self.caster_sin,
             outer_projection_in * self.caster_cos,
         )
+
+    def coilover_lower_mount(self, lower_angle_rad: float) -> Point:
+        """Return the lower coilover mount at its offset along the lower arm.
+
+        Args:
+            lower_angle_rad: Lower control-arm angle in radians.
+
+        Returns:
+            Lower coilover mount point in inches.
+
+        """
+        lower_pickup_point = self.lower_pickup()
+        lower_arm_vector = self.lower_trunnion(lower_angle_rad) - lower_pickup_point
+        return lower_pickup_point + Point(
+            lower_arm_vector.x * self.coilover_lower_offset_in / self.lower_in,
+            lower_arm_vector.y * self.coilover_lower_offset_in / self.lower_in,
+            lower_arm_vector.z * self.coilover_lower_offset_in / self.lower_in,
+        )
+
+    def coilover_upper_mount(self) -> Point:
+        """Return the chassis-fixed upper coilover mount in the x-z plane.
+
+        Returns:
+            Upper coilover mount point in inches.
+
+        """
+        lower_pickup_point = self.lower_pickup()
+        upper_pickup_point = self.upper_pickup()
+        return Point(
+            (lower_pickup_point.x + self.coilover_upper_x_from_lower_pickup_in),
+            upper_pickup_point.y,
+            (lower_pickup_point.z + self.coilover_upper_z_from_lower_pickup_in),
+        )
+
+    def coilover_length_in(self, lower_angle_rad: float) -> float:
+        """Return the coilover mount-to-mount length.
+
+        Args:
+            lower_angle_rad: Lower control-arm angle in radians.
+
+        Returns:
+            Coilover length in inches.
+
+        """
+        return abs(
+            self.coilover_upper_mount() - self.coilover_lower_mount(lower_angle_rad),
+        )
+
+    def coilover_angle_to_vertical_rad(self, lower_angle_rad: float) -> float:
+        """Return the coilover angle away from vertical using the 3D centerline.
+
+        Args:
+            lower_angle_rad: Lower control-arm angle in radians.
+
+        Returns:
+            Coilover angle from vertical in radians.
+
+        """
+        coilover_vector = self.coilover_upper_mount() - self.coilover_lower_mount(
+            lower_angle_rad,
+        )
+        horizontal_distance_in = float(
+            np.hypot(coilover_vector.x, coilover_vector.y),
+        )
+        return float(np.arctan2(horizontal_distance_in, abs(coilover_vector.z)))
 
     def outer_horizon_rad(self, lower_angle_rad: float) -> float:
         """Return the outer link angle from the lateral horizon.

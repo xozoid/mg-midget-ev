@@ -33,6 +33,8 @@ TARGET_MAX_BUMP_CAMBER_DEG = 0.0
 TARGET_MAX_DROOP_CAMBER_DEG = 0.5
 TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 0.2
 TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN = 5.0
+TARGET_COILOVER_MOTION_RATIO_MIN = 0.6
+TARGET_COILOVER_MOTION_RATIO_MAX = 0.9
 TARGET_WHEEL_CENTER_REST_X_IN = 22.984638682953
 WHEEL_CENTER_X_TOLERANCE_IN = 0.25
 CAMBER_ERROR_REFERENCE_DEG = 0.5
@@ -96,6 +98,8 @@ class SuspensionTargetReport:
     toe_peak_to_peak_distance_deg: float
     roll_center_peak_to_peak_in: float
     roll_center_peak_to_peak_distance_in: float
+    coilover_motion_ratio: float
+    coilover_motion_ratio_distance: float
     wheel_center_rest_x_in: float
     wheel_center_x_distance_in: float
     aggregate_score_pct: float
@@ -199,6 +203,7 @@ def evaluate_suspension_targets(
     right_turn_toe_deg: Sequence[float],
     left_turn_toe_deg: Sequence[float],
     roll_center_heights_in: Sequence[float],
+    coilover_lengths_in: Sequence[float],
     wheel_center_rest_x_in: float,
 ) -> SuspensionTargetReport:
     """Evaluate the front-suspension camber and bump-steer targets.
@@ -214,6 +219,7 @@ def evaluate_suspension_targets(
         right_turn_toe_deg: Right-turn toe angles sampled at ``travel_in``.
         left_turn_toe_deg: Left-turn toe angles sampled at ``travel_in``.
         roll_center_heights_in: Roll-center heights above ground at ``travel_in``.
+        coilover_lengths_in: Coilover lengths sampled at ``travel_in``.
         wheel_center_rest_x_in: Wheel-center lateral position at rest, in inches.
 
     Returns:
@@ -286,6 +292,15 @@ def evaluate_suspension_targets(
         0.0,
         roll_center_peak_to_peak_in - TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN,
     )
+    # NOTE: A coilover shortens in bump, so the magnitude gives a positive MR.
+    coilover_motion_ratio = abs(
+        _slope_at_travel(travel_in, coilover_lengths_in, 0.0),
+    )
+    coilover_motion_ratio_distance = _distance_to_range(
+        coilover_motion_ratio,
+        TARGET_COILOVER_MOTION_RATIO_MIN,
+        TARGET_COILOVER_MOTION_RATIO_MAX,
+    )
     wheel_center_x_distance_in = abs(
         wheel_center_rest_x_in - TARGET_WHEEL_CENTER_REST_X_IN,
     )
@@ -302,8 +317,10 @@ def evaluate_suspension_targets(
         + droop_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
         + toe_peak_to_peak_distance_deg / TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
         + roll_center_peak_to_peak_distance_in / TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
+        + coilover_motion_ratio_distance
+        / (TARGET_COILOVER_MOTION_RATIO_MAX - TARGET_COILOVER_MOTION_RATIO_MIN)
         + wheel_center_x_excess_in / WHEEL_CENTER_X_TOLERANCE_IN
-    ) / 8.0
+    ) / 9.0
 
     return SuspensionTargetReport(
         static_camber_deg=static_camber_deg,
@@ -322,6 +339,8 @@ def evaluate_suspension_targets(
         toe_peak_to_peak_distance_deg=toe_peak_to_peak_distance_deg,
         roll_center_peak_to_peak_in=roll_center_peak_to_peak_in,
         roll_center_peak_to_peak_distance_in=roll_center_peak_to_peak_distance_in,
+        coilover_motion_ratio=coilover_motion_ratio,
+        coilover_motion_ratio_distance=coilover_motion_ratio_distance,
         wheel_center_rest_x_in=wheel_center_rest_x_in,
         wheel_center_x_distance_in=wheel_center_x_distance_in,
         aggregate_score_pct=100.0 / (1.0 + normalized_error),
@@ -345,6 +364,10 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
     roll_center_passed = (
         report.roll_center_peak_to_peak_in < TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
     )
+    coilover_motion_ratio_passed = np.isclose(
+        report.coilover_motion_ratio_distance,
+        0.0,
+    )
     wheel_center_passed = (
         report.wheel_center_x_distance_in <= WHEEL_CENTER_X_TOLERANCE_IN
     )
@@ -355,6 +378,7 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
             droop_camber_passed,
             toe_passed,
             roll_center_passed,
+            coilover_motion_ratio_passed,
             wheel_center_passed,
         ),
     )
@@ -433,6 +457,16 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
             f"{report.roll_center_peak_to_peak_in:.1f} in "
             f"(limit {TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN:.1f} in, "
             f"off {report.roll_center_peak_to_peak_distance_in:.1f} in)",
+        ),
+    )
+    print(
+        status_line(
+            passed=coilover_motion_ratio_passed,
+            text="Coilover MR=|dL/dz| "
+            f"{report.coilover_motion_ratio:.2f} "
+            f"(target {TARGET_COILOVER_MOTION_RATIO_MIN:.1f} to "
+            f"{TARGET_COILOVER_MOTION_RATIO_MAX:.1f}, "
+            f"off {report.coilover_motion_ratio_distance:.2f})",
         ),
     )
     print(
@@ -525,6 +559,14 @@ def plot_four_bar_and_kingpin_axis(
             linestyle=":",
             linewidth=1.5,
         )
+        coilover_lower_mount_point = geometry.coilover_lower_mount(lower_angle_rad)
+        coilover_upper_mount_point = geometry.coilover_upper_mount()
+        axis.plot(
+            [coilover_lower_mount_point.x, coilover_upper_mount_point.x],
+            [coilover_lower_mount_point.z, coilover_upper_mount_point.z],
+            color="cyan",
+            linewidth=2.0,
+        )
 
     axis.scatter(
         [lower_pickup_point.x, upper_pickup_point.x],
@@ -536,6 +578,7 @@ def plot_four_bar_and_kingpin_axis(
     axis.plot([], [], color="black", linestyle="--", label="Kingpin axis")
     axis.scatter([], [], color="black", marker="x", label="Axle rotation point")
     axis.plot([], [], color="black", linestyle=":", label="Axle droop")
+    axis.plot([], [], color="cyan", linewidth=2.0, label="Coilover centerline")
     axis.set_aspect("equal", adjustable="box")
     axis.set_xlabel("Lateral position (in)")
     axis.set_ylabel("Height (in)")
@@ -594,14 +637,19 @@ def plot_xz(
         layout="constrained",
     )
     ride_height_figure, ride_height_axes = plt.subplots(
-        nrows=2,
+        nrows=3,
         ncols=2,
-        figsize=(12.0, 10.0),
+        figsize=(12.0, 15.0),
         layout="constrained",
     )
-    axis_camber, axis_wheel_contact, axis_roll_center, axis_future = (
-        ride_height_axes.flatten()
-    )
+    (
+        axis_camber,
+        axis_wheel_contact,
+        axis_roll_center,
+        axis_future,
+        axis_coilover_length,
+        axis_coilover_angle,
+    ) = ride_height_axes.flatten()
     lower_trunnion_points = [
         geometry.lower_trunnion(lower_angle_rad) for lower_angle_rad in lower_angles_rad
     ]
@@ -638,6 +686,21 @@ def plot_xz(
             zip(lower_angles_rad, toe_angles_rad, strict=True),
         ),
     )
+    coilover_lower_mount_points = [
+        geometry.coilover_lower_mount(lower_angle_rad)
+        for lower_angle_rad in lower_angles_rad
+    ]
+    coilover_upper_mount_points = [
+        geometry.coilover_upper_mount() for _ in lower_angles_rad
+    ]
+    coilover_lengths_in = [
+        geometry.coilover_length_in(lower_angle_rad)
+        for lower_angle_rad in lower_angles_rad
+    ]
+    coilover_angles_to_vertical_deg = [
+        float(np.rad2deg(geometry.coilover_angle_to_vertical_rad(lower_angle_rad)))
+        for lower_angle_rad in lower_angles_rad
+    ]
     ride_heights_in = [
         -wheel_contact_point.z for wheel_contact_point in wheel_contact_points
     ]
@@ -815,6 +878,8 @@ def plot_xz(
             lower_angle_rad,
             toe_angle_rad,
         )
+        coilover_lower_mount_point = geometry.coilover_lower_mount(lower_angle_rad)
+        coilover_upper_mount_point = geometry.coilover_upper_mount()
         four_bar_points = (
             lower_pickup_point,
             upper_pickup_point,
@@ -832,6 +897,14 @@ def plot_xz(
             linewidth=2.5,
             label=f"{state_name}: {lower_angle_deg:.1f} degrees",
             zorder=2,
+        )
+        axis_geometry.plot(
+            [coilover_lower_mount_point.x, coilover_upper_mount_point.x],
+            [coilover_lower_mount_point.z, coilover_upper_mount_point.z],
+            color="cyan",
+            linewidth=2.0,
+            label="Coilover centerline" if state_name == "Maximum bump" else None,
+            zorder=4,
         )
         axis_geometry.scatter(
             four_bar_x_in[:-1],
@@ -925,6 +998,17 @@ def plot_xz(
             linewidth=2.5,
             label=f"{state_name}: {lower_angle_deg:.1f} degrees",
             zorder=2,
+        )
+        axis_geometry_contact.plot(
+            [coilover_lower_mount_point.x, coilover_upper_mount_point.x],
+            [
+                coilover_lower_mount_point.z - wheel_contact_point.z,
+                coilover_upper_mount_point.z - wheel_contact_point.z,
+            ],
+            color="cyan",
+            linewidth=2.0,
+            label="Coilover centerline" if state_name == "Maximum bump" else None,
+            zorder=4,
         )
         axis_geometry_contact.scatter(
             four_bar_x_in[:-1],
@@ -1132,6 +1216,18 @@ def plot_xz(
             color=state_color,
             zorder=2,
         )
+        axis_coilover_length.scatter(
+            ride_height_rest_in + wheel_contact_point.z,
+            geometry.coilover_length_in(lower_angle_rad),
+            color=state_color,
+            zorder=2,
+        )
+        axis_coilover_angle.scatter(
+            ride_height_rest_in + wheel_contact_point.z,
+            float(np.rad2deg(geometry.coilover_angle_to_vertical_rad(lower_angle_rad))),
+            color=state_color,
+            zorder=2,
+        )
 
     xz_view_points = [
         Point(0.0, 0.0, 0.0),
@@ -1143,6 +1239,8 @@ def plot_xz(
         *wheel_contact_points,
         *tie_rod_points,
         *steering_rod_link_points,
+        *coilover_lower_mount_points,
+        *coilover_upper_mount_points,
     ]
     view_margin_in = 2.0
     x_view_min_in = min(point.x for point in xz_view_points) - view_margin_in
@@ -1260,6 +1358,26 @@ def plot_xz(
     axis_future.set_title("Bump steer: toe versus ride-height change")
     axis_future.grid()
     axis_future.legend(loc="best")
+    axis_coilover_length.plot(
+        ride_height_changes_from_rest_in,
+        coilover_lengths_in,
+        color="cyan",
+        zorder=1,
+    )
+    axis_coilover_length.set_xlabel("Ride-height change from rest (in)")
+    axis_coilover_length.set_ylabel("Coilover length (in)")
+    axis_coilover_length.set_title("Coilover length versus ride-height change")
+    axis_coilover_length.grid()
+    axis_coilover_angle.plot(
+        ride_height_changes_from_rest_in,
+        coilover_angles_to_vertical_deg,
+        color="cyan",
+        zorder=1,
+    )
+    axis_coilover_angle.set_xlabel("Ride-height change from rest (in)")
+    axis_coilover_angle.set_ylabel("Coilover angle to vertical (degrees)")
+    axis_coilover_angle.set_title("Coilover angle versus ride-height change")
+    axis_coilover_angle.grid()
     geometry_figure.savefig(geometry_output_path, dpi=200)
     ride_height_figure.savefig(ride_height_output_path, dpi=200)
 
@@ -1366,6 +1484,9 @@ def nominal_geometry() -> Geometry:
     return Geometry(
         lower_in=11.11048189,
         upper_in=6.77029941,
+        coilover_lower_offset_in=9,
+        coilover_upper_x_from_lower_pickup_in=7.75,
+        coilover_upper_z_from_lower_pickup_in=12,
         inner_in=9.23497371,
         inner_angle_rad=float(np.deg2rad(-31.69875231)),
         steering_rod_y_in=-4.76869587,
@@ -1440,6 +1561,7 @@ def hard_constraints_passed(report: SuspensionTargetReport) -> bool:
         and report.max_droop_camber_deg < TARGET_MAX_DROOP_CAMBER_DEG
         and report.straight_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
         and report.roll_center_peak_to_peak_in < TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
+        and np.isclose(report.coilover_motion_ratio_distance, 0.0)
         and report.wheel_center_x_distance_in <= WHEEL_CENTER_X_TOLERANCE_IN,
     )
 
@@ -1637,6 +1759,10 @@ def evaluate_geometry_targets(
                 strict=True,
             )
         ]
+        coilover_lengths_in = [
+            geometry.coilover_length_in(lower_angle_rad)
+            for lower_angle_rad in metric_lower_angles_rad
+        ]
         report = evaluate_suspension_targets(
             travel_in,
             camber_deg,
@@ -1647,6 +1773,7 @@ def evaluate_geometry_targets(
             turn_toe_angles_deg[0],
             turn_toe_angles_deg[1],
             roll_center_heights_in,
+            coilover_lengths_in,
             geometry.wheel_center(lower_angle_rest_rad, toe_angle_rest_rad).x,
         )
     except (FloatingPointError, ValueError):
@@ -1670,26 +1797,26 @@ def evaluate_geometry_at_sample_states(
     sample_states: KinematicSampleStates,
 ) -> SensitivityResult:
     """Evaluate geometry at the nominal kinematic states without a new sweep."""
-    try:
-        state_sets = (
-            sample_states.straight_toe_angles_rad,
-            sample_states.right_turn_toe_angles_rad,
-            sample_states.left_turn_toe_angles_rad,
+    state_sets = (
+        sample_states.straight_toe_angles_rad,
+        sample_states.right_turn_toe_angles_rad,
+        sample_states.left_turn_toe_angles_rad,
+    )
+    if not all(
+        geometry_is_valid(geometry, lower_angle_rad, toe_angle_rad)
+        for toe_angles_rad in state_sets
+        for lower_angle_rad, toe_angle_rad in zip(
+            sample_states.lower_angles_rad,
+            toe_angles_rad,
+            strict=True,
         )
-        if not all(
-            geometry_is_valid(geometry, lower_angle_rad, toe_angle_rad)
-            for toe_angles_rad in state_sets
-            for lower_angle_rad, toe_angle_rad in zip(
-                sample_states.lower_angles_rad,
-                toe_angles_rad,
-                strict=True,
-            )
-        ):
-            return SensitivityResult(
-                geometry_valid=False,
-                hard_constraints_passed=False,
-                report=None,
-            )
+    ):
+        return SensitivityResult(
+            geometry_valid=False,
+            hard_constraints_passed=False,
+            report=None,
+        )
+    try:
         camber_deg = [
             float(
                 -np.rad2deg(
@@ -1714,6 +1841,10 @@ def evaluate_geometry_at_sample_states(
                 strict=True,
             )
         ]
+        coilover_lengths_in = [
+            geometry.coilover_length_in(lower_angle_rad)
+            for lower_angle_rad in sample_states.lower_angles_rad
+        ]
         report = evaluate_suspension_targets(
             sample_states.travel_in,
             camber_deg,
@@ -1730,6 +1861,7 @@ def evaluate_geometry_at_sample_states(
                 for value in sample_states.left_turn_toe_angles_rad
             ],
             roll_center_heights_in,
+            coilover_lengths_in,
             geometry.wheel_center(
                 sample_states.lower_angle_rest_rad,
                 sample_states.toe_angle_rest_rad,
@@ -1755,6 +1887,7 @@ METRIC_FIELDS = (
     "right_turn_toe_peak_to_peak_deg",
     "left_turn_toe_peak_to_peak_deg",
     "roll_center_peak_to_peak_in",
+    "coilover_motion_ratio",
     "wheel_center_rest_x_in",
 )
 
@@ -1779,6 +1912,10 @@ def constraint_excesses(report: SuspensionTargetReport) -> dict[str, float]:
         "roll-center migration": (
             report.roll_center_peak_to_peak_distance_in
             / TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
+        ),
+        "coilover motion ratio": (
+            report.coilover_motion_ratio_distance
+            / (TARGET_COILOVER_MOTION_RATIO_MAX - TARGET_COILOVER_MOTION_RATIO_MIN)
         ),
         "wheel-center X": (
             max(
@@ -2301,6 +2438,10 @@ def main(command_line: Sequence[str] | None = None) -> int:
             strict=True,
         )
     ]
+    coilover_lengths_in = [
+        geometry.coilover_length_in(lower_angle_rad)
+        for lower_angle_rad in metric_lower_angles_rad
+    ]
     suspension_target_report = evaluate_suspension_targets(
         travel_in,
         camber_deg,
@@ -2322,6 +2463,7 @@ def main(command_line: Sequence[str] | None = None) -> int:
             )
         ],
         roll_center_heights_in,
+        coilover_lengths_in,
         geometry.wheel_center(lower_angle_rest_rad, toe_angle_rest_rad).x,
     )
     print_suspension_target_report(suspension_target_report)
