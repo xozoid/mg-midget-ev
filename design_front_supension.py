@@ -1,9 +1,15 @@
 """Plot front-suspension pickup and trunnion locations in the x-z plane."""
 
+# ruff: file-ignore[docstring-missing-returns, docstring-missing-exception]
+
 from __future__ import annotations
 
+import argparse
+import csv
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from itertools import starmap
+from operator import itemgetter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,6 +37,43 @@ TARGET_WHEEL_CENTER_REST_X_IN = 22.984638682953
 WHEEL_CENTER_X_TOLERANCE_IN = 0.25
 CAMBER_ERROR_REFERENCE_DEG = 0.5
 STATIC_CAMBER_SLOPE_ERROR_REFERENCE_DEG_PER_IN = 0.4
+FABRICATION_TOLERANCE_IN = 1.0 / 32.0
+MONTE_CARLO_TRIAL_COUNT = 5_000
+MONTE_CARLO_SEED = 1977
+SENSITIVITY_SAMPLE_COUNT = 9
+MINIMUM_VALID_ANGLES = 3
+MINIMUM_TRAVEL_SAMPLES = 2
+
+
+@dataclass(frozen=True)
+class FabricationParameter:
+    """One independently adjustable fabricated dimension in the model."""
+
+    name: str
+    field: str
+    description: str
+
+
+@dataclass(frozen=True)
+class SensitivityResult:
+    """One fabricated-geometry evaluation relative to the accepted nominal design."""
+
+    geometry_valid: bool
+    hard_constraints_passed: bool
+    report: SuspensionTargetReport | None
+
+
+@dataclass(frozen=True)
+class KinematicSampleStates:
+    """Nominal lower-arm and toe states used to compare fabricated geometry."""
+
+    travel_in: tuple[float, ...]
+    lower_angles_rad: tuple[float, ...]
+    straight_toe_angles_rad: tuple[float, ...]
+    right_turn_toe_angles_rad: tuple[float, ...]
+    left_turn_toe_angles_rad: tuple[float, ...]
+    lower_angle_rest_rad: float
+    toe_angle_rest_rad: float
 
 
 @dataclass(frozen=True)
@@ -376,11 +419,11 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
         status_line(
             passed=toe_passed,
             text="Toe P2P "
-            f"straight {report.straight_toe_peak_to_peak_deg:.2f} deg, "
-            f"right {report.right_turn_toe_peak_to_peak_deg:.2f} deg, "
-            f"left {report.left_turn_toe_peak_to_peak_deg:.2f} deg "
-            f"(limit {TARGET_MAX_TOE_PEAK_TO_PEAK_DEG:.2f} deg, "
-            f"off {report.toe_peak_to_peak_distance_deg:.2f} deg)",
+            f"straight {report.straight_toe_peak_to_peak_deg:.1f} deg, "
+            f"right {report.right_turn_toe_peak_to_peak_deg:.1f} deg, "
+            f"left {report.left_turn_toe_peak_to_peak_deg:.1f} deg "
+            f"(limit {TARGET_MAX_TOE_PEAK_TO_PEAK_DEG:.1f} deg, "
+            f"off {report.toe_peak_to_peak_distance_deg:.1f} deg)",
         ),
     )
     print(
@@ -538,9 +581,12 @@ def plot_xz(
     """
     lower_pickup_point = geometry.lower_pickup()
     upper_pickup_point = geometry.upper_pickup()
-    geometry_figure, (
-        (axis_geometry, axis_geometry_yz),
-        (axis_geometry_contact, axis_geometry_contact_yz),
+    (
+        geometry_figure,
+        (
+            (axis_geometry, axis_geometry_yz),
+            (axis_geometry_contact, axis_geometry_contact_yz),
+        ),
     ) = plt.subplots(
         nrows=2,
         ncols=2,
@@ -1289,12 +1335,20 @@ def toe_angle_for_fixed_steering_rod_point(
         ValueError: If the scalar toe solve does not converge.
 
     """
+
+    def steering_link_x_residual(toe_angle_rad: float) -> float:
+        """Return steering-link x error while rejecting impossible configurations."""
+        with np.errstate(all="raise"):
+            return float(
+                geometry.steering_rod_link_point(
+                    lower_angle_rad,
+                    toe_angle_rad,
+                ).x
+                - steering_rod_link_point_x_in,
+            )
+
     toe_angle_solution = root_scalar(
-        lambda toe_angle_rad: geometry.steering_rod_link_point(
-            lower_angle_rad,
-            toe_angle_rad,
-        ).x
-        - steering_rod_link_point_x_in,
+        steering_link_x_residual,
         method="secant",
         x0=toe_angle_initial_rad,
         x1=toe_angle_initial_rad + float(np.deg2rad(0.1)),
@@ -1307,21 +1361,747 @@ def toe_angle_for_fixed_steering_rod_point(
     return float(toe_angle_solution.root)
 
 
-def main() -> int:
+def nominal_geometry() -> Geometry:
+    """Return the accepted front-suspension geometry without modifying it."""
+    return Geometry(
+        lower_in=11.11048189,
+        upper_in=6.77029941,
+        inner_in=9.23497371,
+        inner_angle_rad=float(np.deg2rad(-31.69875231)),
+        steering_rod_y_in=-4.76869587,
+        steering_rod_z_in=5.36411617,
+    )
+
+
+def fabrication_parameters() -> tuple[FabricationParameter, ...]:
+    """Return the fabricated dimensions independently represented by Geometry."""
+    return (
+        FabricationParameter(
+            "Upper pickup X",
+            "upper_pickup_x_in",
+            "Lateral upper chassis pickup coordinate.",
+        ),
+        FabricationParameter(
+            "Upper pickup Z/Y plane",
+            "upper_pickup_plane_z_in",
+            "Suspension-plane height; Y follows fixed caster and is not independent.",
+        ),
+        FabricationParameter(
+            "Upper link length",
+            "upper_in",
+            "Upper control-arm length.",
+        ),
+        FabricationParameter(
+            "Steering rack Y",
+            "steering_rod_y_in",
+            "Longitudinal steering-rack pickup coordinate.",
+        ),
+        FabricationParameter(
+            "Steering rack Z",
+            "steering_rod_z_in",
+            "Vertical steering-rack pickup coordinate.",
+        ),
+    )
+
+
+def perturb_fabrication_parameter(
+    geometry: Geometry,
+    field: str,
+    delta_in: float,
+) -> Geometry:
+    """Return geometry with one modeled fabricated dimension offset in inches."""
+    if field in {"upper_pickup_x_in", "upper_pickup_plane_z_in"}:
+        upper_pickup = geometry.upper_pickup()
+        lower_pickup = geometry.lower_pickup()
+        upper_pickup_x_in = upper_pickup.x
+        upper_pickup_plane_z_in = upper_pickup.z / geometry.caster_cos
+        if field == "upper_pickup_x_in":
+            upper_pickup_x_in += delta_in
+        else:
+            upper_pickup_plane_z_in += delta_in
+        inward_x_in = lower_pickup.x - upper_pickup_x_in
+        inner_in = float(np.hypot(inward_x_in, upper_pickup_plane_z_in))
+        inner_angle_rad = float(np.arctan2(inward_x_in, upper_pickup_plane_z_in))
+        return geometry._replace(
+            inner_in=inner_in,
+            inner_angle_rad=inner_angle_rad,
+        )
+    if field not in {"upper_in", "steering_rod_y_in", "steering_rod_z_in"}:
+        message = f"Unknown fabricated parameter: {field}"
+        raise ValueError(message)
+    return geometry._replace(**{field: getattr(geometry, field) + delta_in})
+
+
+def hard_constraints_passed(report: SuspensionTargetReport) -> bool:
+    """Return whether the report passes only the existing hard constraints."""
+    return bool(
+        np.isclose(report.static_camber_distance_deg, 0.0)
+        and report.max_bump_camber_deg < TARGET_MAX_BUMP_CAMBER_DEG
+        and report.max_droop_camber_deg < TARGET_MAX_DROOP_CAMBER_DEG
+        and report.straight_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
+        and report.roll_center_peak_to_peak_in < TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
+        and report.wheel_center_x_distance_in <= WHEEL_CENTER_X_TOLERANCE_IN,
+    )
+
+
+def evaluate_geometry_targets(
+    geometry: Geometry,
+    sample_count: int = 301,
+    sample_states: KinematicSampleStates | None = None,
+    *,
+    return_sample_states: bool = False,
+) -> SensitivityResult | tuple[SensitivityResult, KinematicSampleStates]:
+    """Evaluate targets for one geometry using the normal ride-height method."""
+    if sample_states is not None:
+        if return_sample_states:
+            message = (
+                "Sample states cannot be requested when they are already supplied."
+            )
+            raise ValueError(message)
+        return evaluate_geometry_at_sample_states(geometry, sample_states)
+    toe_angle_rest_rad = float(np.deg2rad(-0.08))
+    ride_height_rest_in = 8.0
+    ride_height_max_bump_in = ride_height_rest_in - 2.0
+    ride_height_max_drop_in = ride_height_rest_in + 2.0
+    try:  # ruff:ignore[too-many-statements-in-try-clause]
+        valid_lower_angles_rad = [
+            float(lower_angle_rad)
+            for lower_angle_rad in np.linspace(
+                -np.pi / 4.0,
+                np.pi / 4.0,
+                sample_count,
+            )
+            if geometry_is_valid(geometry, float(lower_angle_rad), toe_angle_rest_rad)
+        ]
+        if len(valid_lower_angles_rad) < MINIMUM_VALID_ANGLES:
+            return SensitivityResult(
+                geometry_valid=False,
+                hard_constraints_passed=False,
+                report=None,
+            )
+        ride_heights_in = [
+            -geometry.wheel_contact(lower_angle_rad, toe_angle_rest_rad).z
+            for lower_angle_rad in valid_lower_angles_rad
+        ]
+        ride_height_order = np.argsort(ride_heights_in)
+        lower_angle_rest_rad = float(
+            np.interp(
+                ride_height_rest_in,
+                np.asarray(ride_heights_in)[ride_height_order],
+                np.asarray(valid_lower_angles_rad)[ride_height_order],
+            ),
+        )
+        steering_rod_link_point_rest_x_in = geometry.steering_rod_link_point(
+            lower_angle_rest_rad,
+            toe_angle_rest_rad,
+        ).x
+        constrained_lower_angles_rad: list[float] = []
+        constrained_toe_angles_rad: list[float] = []
+        constrained_ride_heights_in: list[float] = []
+        for lower_angle_rad in valid_lower_angles_rad:
+            try:
+                toe_angle_rad = toe_angle_for_fixed_steering_rod_point(
+                    geometry,
+                    lower_angle_rad,
+                    steering_rod_link_point_rest_x_in,
+                    toe_angle_rest_rad,
+                )
+            except (FloatingPointError, ValueError):
+                # NOTE: Broad angle scans can probe an impossible tie-rod state
+                # outside the required ride-height range. It does not invalidate
+                # geometry that remains solvable through the evaluated travel.
+                continue
+            constrained_lower_angles_rad.append(lower_angle_rad)
+            constrained_toe_angles_rad.append(toe_angle_rad)
+            constrained_ride_heights_in.append(
+                -geometry.wheel_contact(lower_angle_rad, toe_angle_rad).z,
+            )
+        constrained_order = np.argsort(constrained_ride_heights_in)
+        sorted_heights_in = np.asarray(constrained_ride_heights_in)[constrained_order]
+        sorted_lower_angles_rad = np.asarray(constrained_lower_angles_rad)[
+            constrained_order
+        ]
+        lower_angle_max_bump_rad = float(
+            np.interp(
+                ride_height_max_bump_in,
+                sorted_heights_in,
+                sorted_lower_angles_rad,
+            ),
+        )
+        lower_angle_max_drop_rad = float(
+            np.interp(
+                ride_height_max_drop_in,
+                sorted_heights_in,
+                sorted_lower_angles_rad,
+            ),
+        )
+        toe_angle_max_bump_rad = toe_angle_for_fixed_steering_rod_point(
+            geometry,
+            lower_angle_max_bump_rad,
+            steering_rod_link_point_rest_x_in,
+            toe_angle_rest_rad,
+        )
+        toe_angle_max_drop_rad = toe_angle_for_fixed_steering_rod_point(
+            geometry,
+            lower_angle_max_drop_rad,
+            steering_rod_link_point_rest_x_in,
+            toe_angle_rest_rad,
+        )
+        in_travel_indices = [
+            index
+            for index, ride_height_in in enumerate(constrained_ride_heights_in)
+            if ride_height_max_bump_in <= ride_height_in <= ride_height_max_drop_in
+        ]
+        if len(in_travel_indices) < MINIMUM_TRAVEL_SAMPLES:
+            return SensitivityResult(
+                geometry_valid=False,
+                hard_constraints_passed=False,
+                report=None,
+            )
+        metric_lower_angles_rad = [
+            lower_angle_max_drop_rad,
+            *(constrained_lower_angles_rad[index] for index in in_travel_indices),
+            lower_angle_max_bump_rad,
+        ]
+        metric_toe_angles_rad = [
+            toe_angle_max_drop_rad,
+            *(constrained_toe_angles_rad[index] for index in in_travel_indices),
+            toe_angle_max_bump_rad,
+        ]
+        travel_in = [
+            -2.0,
+            *(
+                ride_height_rest_in - constrained_ride_heights_in[index]
+                for index in in_travel_indices
+            ),
+            2.0,
+        ]
+        toe_angle_right_turn_rest_rad = toe_angle_rest_rad + float(np.deg2rad(5.0))
+        toe_angle_left_turn_rest_rad = toe_angle_rest_rad - float(np.deg2rad(5.0))
+        turn_toe_angles_deg: list[list[float]] = []
+        turn_toe_angles_rad_by_turn: list[list[float]] = []
+        for turn_toe_angle_rest_rad in (
+            toe_angle_right_turn_rest_rad,
+            toe_angle_left_turn_rest_rad,
+        ):
+            steering_link_x_in = geometry.steering_rod_link_point(
+                lower_angle_rest_rad,
+                turn_toe_angle_rest_rad,
+            ).x
+            turn_toe_angles_rad = [
+                toe_angle_for_fixed_steering_rod_point(
+                    geometry,
+                    lower_angle_rad,
+                    steering_link_x_in,
+                    turn_toe_angle_rest_rad,
+                )
+                for lower_angle_rad in metric_lower_angles_rad
+            ]
+            turn_toe_angles_rad_by_turn.append(turn_toe_angles_rad)
+            turn_toe_angles_deg.append(
+                [
+                    float(np.rad2deg(toe_angle_rad))
+                    for toe_angle_rad in turn_toe_angles_rad
+                ],
+            )
+        sample_states = KinematicSampleStates(
+            travel_in=tuple(travel_in),
+            lower_angles_rad=tuple(metric_lower_angles_rad),
+            straight_toe_angles_rad=tuple(metric_toe_angles_rad),
+            right_turn_toe_angles_rad=tuple(turn_toe_angles_rad_by_turn[0]),
+            left_turn_toe_angles_rad=tuple(turn_toe_angles_rad_by_turn[1]),
+            lower_angle_rest_rad=lower_angle_rest_rad,
+            toe_angle_rest_rad=toe_angle_rest_rad,
+        )
+        camber_deg = [
+            float(
+                -np.rad2deg(
+                    np.arctan2(
+                        geometry.wheel_axis(lower_angle_rad, toe_angle_rad).z,
+                        geometry.wheel_axis(lower_angle_rad, toe_angle_rad).x,
+                    ),
+                ),
+            )
+            for lower_angle_rad, toe_angle_rad in zip(
+                metric_lower_angles_rad,
+                metric_toe_angles_rad,
+                strict=True,
+            )
+        ]
+        roll_center_heights_in = [
+            geometry.roll_center(lower_angle_rad, toe_angle_rad).z
+            - geometry.wheel_contact(lower_angle_rad, toe_angle_rad).z
+            for lower_angle_rad, toe_angle_rad in zip(
+                metric_lower_angles_rad,
+                metric_toe_angles_rad,
+                strict=True,
+            )
+        ]
+        report = evaluate_suspension_targets(
+            travel_in,
+            camber_deg,
+            [
+                float(np.rad2deg(toe_angle_rad))
+                for toe_angle_rad in metric_toe_angles_rad
+            ],
+            turn_toe_angles_deg[0],
+            turn_toe_angles_deg[1],
+            roll_center_heights_in,
+            geometry.wheel_center(lower_angle_rest_rad, toe_angle_rest_rad).x,
+        )
+    except (FloatingPointError, ValueError):
+        return SensitivityResult(
+            geometry_valid=False,
+            hard_constraints_passed=False,
+            report=None,
+        )
+    result = SensitivityResult(
+        geometry_valid=True,
+        hard_constraints_passed=hard_constraints_passed(report),
+        report=report,
+    )
+    if return_sample_states:
+        return result, sample_states
+    return result
+
+
+def evaluate_geometry_at_sample_states(
+    geometry: Geometry,
+    sample_states: KinematicSampleStates,
+) -> SensitivityResult:
+    """Evaluate geometry at the nominal kinematic states without a new sweep."""
+    try:
+        state_sets = (
+            sample_states.straight_toe_angles_rad,
+            sample_states.right_turn_toe_angles_rad,
+            sample_states.left_turn_toe_angles_rad,
+        )
+        if not all(
+            geometry_is_valid(geometry, lower_angle_rad, toe_angle_rad)
+            for toe_angles_rad in state_sets
+            for lower_angle_rad, toe_angle_rad in zip(
+                sample_states.lower_angles_rad,
+                toe_angles_rad,
+                strict=True,
+            )
+        ):
+            return SensitivityResult(
+                geometry_valid=False,
+                hard_constraints_passed=False,
+                report=None,
+            )
+        camber_deg = [
+            float(
+                -np.rad2deg(
+                    np.arctan2(
+                        geometry.wheel_axis(lower_angle_rad, toe_angle_rad).z,
+                        geometry.wheel_axis(lower_angle_rad, toe_angle_rad).x,
+                    ),
+                ),
+            )
+            for lower_angle_rad, toe_angle_rad in zip(
+                sample_states.lower_angles_rad,
+                sample_states.straight_toe_angles_rad,
+                strict=True,
+            )
+        ]
+        roll_center_heights_in = [
+            geometry.roll_center(lower_angle_rad, toe_angle_rad).z
+            - geometry.wheel_contact(lower_angle_rad, toe_angle_rad).z
+            for lower_angle_rad, toe_angle_rad in zip(
+                sample_states.lower_angles_rad,
+                sample_states.straight_toe_angles_rad,
+                strict=True,
+            )
+        ]
+        report = evaluate_suspension_targets(
+            sample_states.travel_in,
+            camber_deg,
+            [
+                float(np.rad2deg(value))
+                for value in sample_states.straight_toe_angles_rad
+            ],
+            [
+                float(np.rad2deg(value))
+                for value in sample_states.right_turn_toe_angles_rad
+            ],
+            [
+                float(np.rad2deg(value))
+                for value in sample_states.left_turn_toe_angles_rad
+            ],
+            roll_center_heights_in,
+            geometry.wheel_center(
+                sample_states.lower_angle_rest_rad,
+                sample_states.toe_angle_rest_rad,
+            ).x,
+        )
+    except (FloatingPointError, ValueError):
+        return SensitivityResult(
+            geometry_valid=False,
+            hard_constraints_passed=False,
+            report=None,
+        )
+    return SensitivityResult(
+        geometry_valid=True,
+        hard_constraints_passed=hard_constraints_passed(report),
+        report=report,
+    )
+
+
+METRIC_FIELDS = (
+    "static_camber_deg",
+    "static_camber_slope_deg_per_in",
+    "straight_toe_peak_to_peak_deg",
+    "right_turn_toe_peak_to_peak_deg",
+    "left_turn_toe_peak_to_peak_deg",
+    "roll_center_peak_to_peak_in",
+    "wheel_center_rest_x_in",
+)
+
+
+def report_row(report: SuspensionTargetReport | None) -> dict[str, float | str]:
+    """Return selected report values, or blank fields for invalid geometry."""
+    report_fields = tuple(SuspensionTargetReport.__dataclass_fields__)
+    if report is None:
+        return dict.fromkeys(report_fields, "")
+    return {field: getattr(report, field) for field in report_fields}
+
+
+def constraint_excesses(report: SuspensionTargetReport) -> dict[str, float]:
+    """Return existing hard-constraint excesses for ranking and reporting."""
+    return {
+        "static camber": report.static_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG,
+        "bump camber": report.bump_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG,
+        "droop camber": report.droop_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG,
+        "straight bump steer": (
+            report.toe_peak_to_peak_distance_deg / TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
+        ),
+        "roll-center migration": (
+            report.roll_center_peak_to_peak_distance_in
+            / TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
+        ),
+        "wheel-center X": (
+            max(
+                0.0,
+                report.wheel_center_x_distance_in - WHEEL_CENTER_X_TOLERANCE_IN,
+            )
+            / WHEEL_CENTER_X_TOLERANCE_IN
+        ),
+    }
+
+
+def evaluate_one_at_a_time(
+    geometry: Geometry,
+    nominal_report: SuspensionTargetReport,
+    sample_states: KinematicSampleStates,
+    tolerance_in: float,
+) -> list[dict[str, float | str | bool]]:
+    """Evaluate plus and minus offsets at the nominal kinematic states."""
+    rows: list[dict[str, float | str | bool]] = []
+    for parameter in fabrication_parameters():
+        for delta_in in (-tolerance_in, 0.0, tolerance_in):
+            result = evaluate_geometry_targets(
+                perturb_fabrication_parameter(geometry, parameter.field, delta_in),
+                sample_states=sample_states,
+            )
+            row: dict[str, float | str | bool] = {
+                "parameter": parameter.name,
+                "field": parameter.field,
+                "delta_in": delta_in,
+                "geometry_valid": result.geometry_valid,
+                "hard_constraints_passed": result.hard_constraints_passed,
+            }
+            row.update(report_row(result.report))
+            for field in METRIC_FIELDS:
+                row[f"delta_{field}"] = (
+                    ""
+                    if result.report is None
+                    else getattr(result.report, field) - getattr(nominal_report, field)
+                )
+            rows.append(row)
+    return rows
+
+
+def write_csv(path: Path, rows: Sequence[dict[str, float | str | bool]]) -> None:
+    """Write sensitivity rows to a CSV file with stable column ordering."""
+    if not rows:
+        return
+    with path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def print_one_at_a_time_summary(rows: Sequence[dict[str, float | str | bool]]) -> None:
+    """Print OAT results ordered by their largest hard-constraint excess."""
+    by_parameter: dict[str, list[dict[str, float | str | bool]]] = {}
+    for row in rows:
+        by_parameter.setdefault(str(row["parameter"]), []).append(row)
+
+    def impact(parameter_rows: Sequence[dict[str, float | str | bool]]) -> float:
+        excesses: list[float] = []
+        for row in parameter_rows:
+            if not bool(row["geometry_valid"]):
+                return float("inf")
+            report = SuspensionTargetReport(
+                **{
+                    field.name: float(row[field.name])
+                    for field in SuspensionTargetReport.__dataclass_fields__.values()
+                },
+            )
+            excesses.extend(constraint_excesses(report).values())
+        return max(excesses, default=0.0)
+
+    ordered = sorted(
+        by_parameter.items(),
+        key=lambda item: impact(item[1]),
+        reverse=True,
+    )
+    print("\n=== FABRICATION SENSITIVITY: ONE AT A TIME ===")
+    print(
+        "Parameter                  Offset  Camber  Slope  Toe  RC P2P  Wheel X  Hard",
+    )
+    for _, parameter_rows in ordered:
+        for row in sorted(parameter_rows, key=lambda item: float(item["delta_in"])):
+            direction = {
+                -FABRICATION_TOLERANCE_IN: "-1/32",
+                0.0: "nominal",
+                FABRICATION_TOLERANCE_IN: "+1/32",
+            }[float(row["delta_in"])]
+            if not bool(row["geometry_valid"]):
+                print(
+                    f"{row['parameter']!s:<26} {direction:<7}  invalid",
+                )
+                continue
+            print(
+                f"{row['parameter']!s:<26} {direction:<7}  "
+                f"{float(row['static_camber_deg']):+5.1f}  "
+                f"{float(row['static_camber_slope_deg_per_in']):+5.1f}  "
+                f"{float(row['straight_toe_peak_to_peak_deg']):4.1f}  "
+                f"{float(row['roll_center_peak_to_peak_in']):5.1f}  "
+                f"{float(row['wheel_center_rest_x_in']):6.1f}  "
+                f"{'PASS' if bool(row['hard_constraints_passed']) else 'FAIL'}",
+            )
+
+
+def run_monte_carlo(
+    geometry: Geometry,
+    sample_states: KinematicSampleStates,
+    trial_count: int,
+    tolerance_in: float,
+    seed: int,
+) -> list[dict[str, float | str | bool]]:
+    """Run independent uniform fabricated-dimension perturbation trials."""
+    random_generator = np.random.default_rng(seed)
+    parameters = fabrication_parameters()
+    deltas_by_trial_in = random_generator.uniform(
+        -tolerance_in,
+        tolerance_in,
+        (trial_count, len(parameters)),
+    )
+    arguments = [
+        (geometry, sample_states, trial, deltas_in)
+        for trial, deltas_in in enumerate(deltas_by_trial_in)
+    ]
+    with ProcessPoolExecutor(max_workers=8) as executor:
+        return list(executor.map(_evaluate_monte_carlo_trial, arguments, chunksize=20))
+
+
+def _evaluate_monte_carlo_trial(
+    arguments: tuple[Geometry, KinematicSampleStates, int, np.ndarray],
+) -> dict[str, float | str | bool]:
+    """Evaluate one deterministic Monte Carlo perturbation in a worker process."""
+    geometry, sample_states, trial, deltas_in = arguments
+    perturbed_geometry = geometry
+    row: dict[str, float | str | bool] = {"trial": trial}
+    for parameter, delta_in in zip(fabrication_parameters(), deltas_in, strict=True):
+        perturbed_geometry = perturb_fabrication_parameter(
+            perturbed_geometry,
+            parameter.field,
+            float(delta_in),
+        )
+        row[f"delta_{parameter.field}"] = float(delta_in)
+    result = evaluate_geometry_targets(
+        perturbed_geometry,
+        sample_states=sample_states,
+    )
+    row["geometry_valid"] = result.geometry_valid
+    row["hard_constraints_passed"] = result.hard_constraints_passed
+    row.update(report_row(result.report))
+    if result.report is None:
+        row["violated_constraints"] = "geometrically invalid"
+    else:
+        violated_constraints = [
+            name
+            for name, excess in constraint_excesses(result.report).items()
+            if excess > 0.0
+        ]
+        row["violated_constraints"] = "; ".join(violated_constraints)
+    return row
+
+
+def print_monte_carlo_summary(rows: Sequence[dict[str, float | str | bool]]) -> None:
+    """Print validity, hard-pass, distribution, and violation summaries."""
+    trial_count = len(rows)
+    valid_rows = [row for row in rows if bool(row["geometry_valid"])]
+    hard_pass_rows = [row for row in valid_rows if bool(row["hard_constraints_passed"])]
+    print("\n=== FABRICATION SENSITIVITY: 5,000 MONTE CARLO TRIALS ===")
+    print(f"Geometrically valid: {100.0 * len(valid_rows) / trial_count:.1f}%")
+    print(f"Hard constraints passed: {100.0 * len(hard_pass_rows) / trial_count:.1f}%")
+    print("Metric                         Mean   Std    P5    P95")
+    for field in METRIC_FIELDS:
+        values = np.asarray([float(row[field]) for row in valid_rows])
+        print(
+            f"{field:<30} {np.mean(values):+5.1f}  {np.std(values):4.1f}  "
+            f"{np.percentile(values, 5):+5.1f}  {np.percentile(values, 95):+5.1f}",
+        )
+    worst_toe_deg = max(
+        float(row["straight_toe_peak_to_peak_deg"]) for row in valid_rows
+    )
+    worst_static_camber_deg = max(
+        valid_rows,
+        key=lambda row: abs(float(row["static_camber_deg"]) + 0.75),
+    )["static_camber_deg"]
+    print(f"Worst straight-ahead bump steer: {worst_toe_deg:.1f} deg P2P")
+    print(f"Worst static camber: {float(worst_static_camber_deg):+.1f} deg")
+    violation_counts: dict[str, int] = {}
+    for row in valid_rows:
+        for name in str(row["violated_constraints"]).split("; "):
+            if name:
+                violation_counts[name] = violation_counts.get(name, 0) + 1
+    if violation_counts:
+        ordered = sorted(
+            violation_counts.items(),
+            key=itemgetter(1),
+            reverse=True,
+        )
+        print("Most frequent hard-constraint violations:")
+        for name, count in ordered:
+            print(f"  {name}: {100.0 * count / len(valid_rows):.1f}% of valid trials")
+    else:
+        print("Most frequent hard-constraint violations: none")
+
+
+def print_recommendations(
+    geometry: Geometry,
+    nominal_report: SuspensionTargetReport,
+    sample_states: KinematicSampleStates,
+    tolerance_rows: Sequence[dict[str, float | str | bool]],
+) -> None:
+    """Print fabrication recommendations backed by additional +/-1/16 in checks."""
+    rows_at_one_sixteenth_in = evaluate_one_at_a_time(
+        geometry,
+        nominal_report,
+        sample_states,
+        1.0 / 16.0,
+    )
+    print("\n=== FABRICATION RECOMMENDATIONS ===")
+    for parameter in fabrication_parameters():
+        parameter_tolerance_rows = [
+            row for row in tolerance_rows if row["field"] == parameter.field
+        ]
+        parameter_one_sixteenth_rows = [
+            row for row in rows_at_one_sixteenth_in if row["field"] == parameter.field
+        ]
+        tolerance_passed = all(
+            bool(row["hard_constraints_passed"]) for row in parameter_tolerance_rows
+        )
+        one_sixteenth_passed = all(
+            bool(row["hard_constraints_passed"]) for row in parameter_one_sixteenth_rows
+        )
+        if not tolerance_passed:
+            recommendation = (
+                "Tighter than ±1/32 in or post-fabrication adjustment is justified."
+            )
+        elif one_sixteenth_passed:
+            recommendation = "±1/16 in may be acceptable; both extremes were evaluated."
+        else:
+            recommendation = (
+                "±1/32 in is sufficient in isolation; do not relax to ±1/16 in."
+            )
+        print(f"{parameter.name}: {recommendation}")
+    print(
+        "Upper-pickup errors alter camber gain and roll-center migration, so static "
+        "alignment can correct only the resting camber, not the kinematics.",
+    )
+    print(
+        "Steering-rack Y/Z errors alter bump steer and cannot be corrected by static "
+        "alignment alone; provide rack shims or slots for post-fabrication adjustment.",
+    )
+
+
+def run_sensitivity_analysis() -> int:
+    """Run fabrication OAT and Monte Carlo analysis.
+
+    The nominal geometry is not changed.
+
+    """
+    geometry = nominal_geometry()
+    nominal_evaluation = evaluate_geometry_targets(
+        geometry,
+        return_sample_states=True,
+    )
+    nominal_result, sample_states = nominal_evaluation
+    if nominal_result.report is None:
+        message = "Accepted nominal geometry could not be evaluated."
+        raise RuntimeError(message)
+    zero_result = evaluate_geometry_targets(
+        perturb_fabrication_parameter(geometry, "upper_in", 0.0),
+        sample_states=sample_states,
+    )
+    if zero_result.report != nominal_result.report or geometry != nominal_geometry():
+        message = "Sensitivity validation failed to preserve the nominal geometry."
+        raise RuntimeError(message)
+    one_at_a_time_rows = evaluate_one_at_a_time(
+        geometry,
+        nominal_result.report,
+        sample_states,
+        FABRICATION_TOLERANCE_IN,
+    )
+    monte_carlo_rows = run_monte_carlo(
+        geometry,
+        sample_states,
+        MONTE_CARLO_TRIAL_COUNT,
+        FABRICATION_TOLERANCE_IN,
+        MONTE_CARLO_SEED,
+    )
+    write_csv(Path("front_suspension_sensitivity_oat.csv"), one_at_a_time_rows)
+    write_csv(Path("front_suspension_sensitivity_monte_carlo.csv"), monte_carlo_rows)
+    print("Nominal kinematic sweep reused for every perturbation: PASS")
+    print("Zero perturbation reproduces nominal metrics: PASS")
+    print("Positive and negative perturbations evaluated: PASS")
+    print("Nominal geometry unchanged after analysis: PASS")
+    print_one_at_a_time_summary(one_at_a_time_rows)
+    print_monte_carlo_summary(monte_carlo_rows)
+    print_recommendations(
+        geometry,
+        nominal_result.report,
+        sample_states,
+        one_at_a_time_rows,
+    )
+    print("CSV: front_suspension_sensitivity_oat.csv")
+    print("CSV: front_suspension_sensitivity_monte_carlo.csv")
+    return 0
+
+
+def main(command_line: Sequence[str] | None = None) -> int:
     """Create the focused front-suspension four-bar plot.
 
     Returns:
         Zero after saving the plot.
 
     """
-    geometry = Geometry(
-        lower_in=11.31048189,
-        upper_in=6.97029941,
-        inner_in=9.23497371,
-        inner_angle_rad=float(np.deg2rad(-31.69875231)),
-        steering_rod_y_in=-4.76869587,
-        steering_rod_z_in=5.36411617,
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--sensitivity",
+        action="store_true",
+        help="run the fabrication-tolerance sensitivity analysis",
     )
+    arguments = parser.parse_args(command_line)
+    if arguments.sensitivity:
+        return run_sensitivity_analysis()
+
+    geometry = nominal_geometry()
     lower_angles_rad = np.deg2rad(np.linspace(-5.0, 5.0, 11))
     plot_four_bar_and_kingpin_axis(
         geometry,
