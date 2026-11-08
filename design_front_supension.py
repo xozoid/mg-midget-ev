@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from colorama import Fore, Style
 from matplotlib.patches import Ellipse
-from scipy.optimize import root_scalar
+from scipy.optimize import least_squares, root_scalar
 
 from mg.front_suspension import Geometry, Point
 
@@ -42,8 +42,14 @@ WHEEL_CENTER_X_TOLERANCE_IN = 0.25
 CAMBER_ERROR_REFERENCE_DEG = 0.5
 STATIC_CAMBER_SLOPE_ERROR_REFERENCE_DEG_PER_IN = 0.4
 FABRICATION_TOLERANCE_IN = 1.0 / 32.0
+FABRICATION_TOLERANCE_GOAL_IN = 1.0 / 16.0
 MONTE_CARLO_TRIAL_COUNT = 5_000
 MONTE_CARLO_SEED = 1977
+TUNING_MONTE_CARLO_TRIAL_COUNT = 200
+TUNING_EVALUATION_SAMPLE_COUNT = 61
+# NOTE: This numerical guard detects a nonrecoverable setup; it is not a hardware limit.
+TUNING_ADJUSTMENT_SEARCH_LIMIT_IN = 1.0
+TUNING_NOMINAL_ERROR_LIMIT_FRACTION = 0.10
 SENSITIVITY_SAMPLE_COUNT = 9
 MINIMUM_VALID_ANGLES = 3
 MINIMUM_TRAVEL_SAMPLES = 2
@@ -105,6 +111,29 @@ class SuspensionTargetReport:
     wheel_center_rest_x_in: float
     wheel_center_x_distance_in: float
     aggregate_score_pct: float
+
+
+@dataclass(frozen=True)
+class SensitivityTarget:
+    """One kinematic target to recover after fabrication and installation."""
+
+    label: str
+    field: str
+    unit: str
+
+
+@dataclass(frozen=True)
+class TuningResult:
+    """Post-fabrication tuning result for one fixed-link variation."""
+
+    geometry_valid: bool
+    nominal_targets_recovered: bool
+    report: SuspensionTargetReport | None
+    upper_pickup_x_adjustment_in: float
+    upper_pickup_plane_z_adjustment_in: float
+    steering_rack_y_adjustment_in: float
+    steering_rack_z_adjustment_in: float
+    maximum_normalized_nominal_error: float
 
 
 def _values_between_travel_limits(
@@ -1883,6 +1912,63 @@ METRIC_FIELDS = (
     "wheel_center_rest_x_in",
 )
 
+TUNING_TARGETS = (
+    SensitivityTarget("Static camber", "static_camber_deg", "deg"),
+    SensitivityTarget("Camber slope", "static_camber_slope_deg_per_in", "deg/in"),
+    SensitivityTarget(
+        "Bump camber monotonicity",
+        "bump_camber_monotonicity_penalty_deg",
+        "deg",
+    ),
+    SensitivityTarget("Maximum bump camber", "max_bump_camber_deg", "deg"),
+    SensitivityTarget("Maximum droop camber", "max_droop_camber_deg", "deg"),
+    SensitivityTarget(
+        "Straight-ahead bump steer",
+        "straight_toe_peak_to_peak_deg",
+        "deg",
+    ),
+    SensitivityTarget(
+        "Right-turn bump steer",
+        "right_turn_toe_peak_to_peak_deg",
+        "deg",
+    ),
+    SensitivityTarget(
+        "Left-turn bump steer",
+        "left_turn_toe_peak_to_peak_deg",
+        "deg",
+    ),
+    SensitivityTarget("Roll-center migration", "roll_center_peak_to_peak_in", "in"),
+)
+TUNING_TARGET_ERROR_SCALES_BY_FIELD = {
+    "static_camber_deg": CAMBER_ERROR_REFERENCE_DEG,
+    "static_camber_slope_deg_per_in": STATIC_CAMBER_SLOPE_ERROR_REFERENCE_DEG_PER_IN,
+    "bump_camber_monotonicity_penalty_deg": CAMBER_ERROR_REFERENCE_DEG,
+    "max_bump_camber_deg": CAMBER_ERROR_REFERENCE_DEG,
+    "max_droop_camber_deg": CAMBER_ERROR_REFERENCE_DEG,
+    "straight_toe_peak_to_peak_deg": TARGET_MAX_TOE_PEAK_TO_PEAK_DEG,
+    "right_turn_toe_peak_to_peak_deg": TARGET_MAX_TOE_PEAK_TO_PEAK_DEG,
+    "left_turn_toe_peak_to_peak_deg": TARGET_MAX_TOE_PEAK_TO_PEAK_DEG,
+    "roll_center_peak_to_peak_in": TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN,
+}
+TUNING_UPPER_PICKUP_TARGETS = tuple(
+    target
+    for target in TUNING_TARGETS
+    if target.field not in {
+        "straight_toe_peak_to_peak_deg",
+        "right_turn_toe_peak_to_peak_deg",
+        "left_turn_toe_peak_to_peak_deg",
+    }
+)
+TUNING_RACK_TARGETS = tuple(
+    target
+    for target in TUNING_TARGETS
+    if target.field in {
+        "straight_toe_peak_to_peak_deg",
+        "right_turn_toe_peak_to_peak_deg",
+        "left_turn_toe_peak_to_peak_deg",
+    }
+)
+
 
 def report_row(report: SuspensionTargetReport | None) -> dict[str, float | str]:
     """Return selected report values, or blank fields for invalid geometry."""
@@ -1890,6 +1976,251 @@ def report_row(report: SuspensionTargetReport | None) -> dict[str, float | str]:
     if report is None:
         return dict.fromkeys(report_fields, "")
     return {field: getattr(report, field) for field in report_fields}
+
+
+def geometry_with_tuning_adjustments(
+    fabricated_geometry: Geometry,
+    upper_pickup_x_adjustment_in: float,
+    upper_pickup_plane_z_adjustment_in: float,
+    steering_rack_y_adjustment_in: float,
+    steering_rack_z_adjustment_in: float,
+) -> Geometry:
+    """Return a fabricated geometry after upper-pickup and rack adjustments."""
+    adjusted_geometry = perturb_fabrication_parameter(
+        fabricated_geometry,
+        "upper_pickup_x_in",
+        upper_pickup_x_adjustment_in,
+    )
+    adjusted_geometry = perturb_fabrication_parameter(
+        adjusted_geometry,
+        "upper_pickup_plane_z_in",
+        upper_pickup_plane_z_adjustment_in,
+    )
+    return adjusted_geometry._replace(
+        steering_rod_y_in=(
+            adjusted_geometry.steering_rod_y_in + steering_rack_y_adjustment_in
+        ),
+        steering_rod_z_in=(
+            adjusted_geometry.steering_rod_z_in + steering_rack_z_adjustment_in
+        ),
+    )
+
+
+def normalized_nominal_target_errors(
+    report: SuspensionTargetReport | None,
+    nominal_report: SuspensionTargetReport,
+    targets: Sequence[SensitivityTarget],
+) -> np.ndarray:
+    """Return target deviations from nominal, scaled by their original rule width."""
+    if report is None:
+        return np.full(len(targets), 1_000.0)
+    return np.asarray(
+        [
+            (getattr(report, target.field) - getattr(nominal_report, target.field))
+            / TUNING_TARGET_ERROR_SCALES_BY_FIELD[target.field]
+            for target in targets
+        ],
+    )
+
+
+def tune_fabricated_geometry(
+    fabricated_geometry: Geometry,
+    nominal_report: SuspensionTargetReport,
+) -> TuningResult:
+    """Tune a fabricated geometry back toward nominal kinematic behavior."""
+    adjustment_bounds_in = (
+        -TUNING_ADJUSTMENT_SEARCH_LIMIT_IN,
+        TUNING_ADJUSTMENT_SEARCH_LIMIT_IN,
+    )
+
+    def upper_pickup_residual(
+        upper_pickup_adjustments_in: np.ndarray,
+    ) -> np.ndarray:
+        """Return non-toe kinematic deviations for an upper-pickup adjustment."""
+        geometry = geometry_with_tuning_adjustments(
+            fabricated_geometry,
+            float(upper_pickup_adjustments_in[0]),
+            float(upper_pickup_adjustments_in[1]),
+            0.0,
+            0.0,
+        )
+        result = evaluate_geometry_targets(
+            geometry,
+            sample_count=TUNING_EVALUATION_SAMPLE_COUNT,
+        )
+        return normalized_nominal_target_errors(
+            result.report,
+            nominal_report,
+            TUNING_UPPER_PICKUP_TARGETS,
+        )
+
+    upper_pickup_solution = least_squares(
+        upper_pickup_residual,
+        x0=np.zeros(2),
+        bounds=adjustment_bounds_in,
+        max_nfev=12,
+    )
+
+    def rack_residual(steering_rack_adjustments_in: np.ndarray) -> np.ndarray:
+        """Return bump-steer deviations for a rack adjustment after pickup tuning."""
+        geometry = geometry_with_tuning_adjustments(
+            fabricated_geometry,
+            float(upper_pickup_solution.x[0]),
+            float(upper_pickup_solution.x[1]),
+            float(steering_rack_adjustments_in[0]),
+            float(steering_rack_adjustments_in[1]),
+        )
+        result = evaluate_geometry_targets(
+            geometry,
+            sample_count=TUNING_EVALUATION_SAMPLE_COUNT,
+        )
+        return normalized_nominal_target_errors(
+            result.report,
+            nominal_report,
+            TUNING_RACK_TARGETS,
+        )
+
+    steering_rack_solution = least_squares(
+        rack_residual,
+        x0=np.zeros(2),
+        bounds=adjustment_bounds_in,
+        max_nfev=12,
+    )
+    tuned_geometry = geometry_with_tuning_adjustments(
+        fabricated_geometry,
+        float(upper_pickup_solution.x[0]),
+        float(upper_pickup_solution.x[1]),
+        float(steering_rack_solution.x[0]),
+        float(steering_rack_solution.x[1]),
+    )
+    tuned_result = evaluate_geometry_targets(
+        tuned_geometry,
+        sample_count=TUNING_EVALUATION_SAMPLE_COUNT,
+    )
+    target_errors = normalized_nominal_target_errors(
+        tuned_result.report,
+        nominal_report,
+        TUNING_TARGETS,
+    )
+    maximum_normalized_nominal_error = float(np.max(np.abs(target_errors)))
+    return TuningResult(
+        geometry_valid=tuned_result.geometry_valid,
+        nominal_targets_recovered=(
+            tuned_result.geometry_valid
+            and maximum_normalized_nominal_error <= TUNING_NOMINAL_ERROR_LIMIT_FRACTION
+        ),
+        report=tuned_result.report,
+        upper_pickup_x_adjustment_in=float(upper_pickup_solution.x[0]),
+        upper_pickup_plane_z_adjustment_in=float(upper_pickup_solution.x[1]),
+        steering_rack_y_adjustment_in=float(steering_rack_solution.x[0]),
+        steering_rack_z_adjustment_in=float(steering_rack_solution.x[1]),
+        maximum_normalized_nominal_error=maximum_normalized_nominal_error,
+    )
+
+
+def _evaluate_tuning_trial(
+    arguments: tuple[Geometry, SuspensionTargetReport, int, float, float],
+) -> dict[str, float | str | bool]:
+    """Tune one fabricated link pair back toward nominal performance."""
+    nominal_geometry_value, nominal_report, trial, lower_delta_in, upper_delta_in = (
+        arguments
+    )
+    fabricated_geometry = nominal_geometry_value._replace(
+        lower_in=nominal_geometry_value.lower_in + lower_delta_in,
+        upper_in=nominal_geometry_value.upper_in + upper_delta_in,
+    )
+    tuning_result = tune_fabricated_geometry(fabricated_geometry, nominal_report)
+    row: dict[str, float | str | bool] = {
+        "trial": trial,
+        "lower_link_length_error_in": lower_delta_in,
+        "upper_link_length_error_in": upper_delta_in,
+        "geometry_valid": tuning_result.geometry_valid,
+        "nominal_targets_recovered": tuning_result.nominal_targets_recovered,
+        "upper_pickup_x_adjustment_in": tuning_result.upper_pickup_x_adjustment_in,
+        "upper_pickup_plane_z_adjustment_in": (
+            tuning_result.upper_pickup_plane_z_adjustment_in
+        ),
+        "steering_rack_y_adjustment_in": tuning_result.steering_rack_y_adjustment_in,
+        "steering_rack_z_adjustment_in": tuning_result.steering_rack_z_adjustment_in,
+        "maximum_normalized_nominal_error": (
+            tuning_result.maximum_normalized_nominal_error
+        ),
+    }
+    row.update(report_row(tuning_result.report))
+    return row
+
+
+def run_tuning_recoverability_analysis(
+    geometry: Geometry,
+    nominal_report: SuspensionTargetReport,
+    link_tolerance_in: float,
+) -> list[dict[str, float | str | bool]]:
+    """Tune random fixed-link variations back toward nominal behavior."""
+    random_generator = np.random.default_rng(MONTE_CARLO_SEED)
+    link_errors_in = random_generator.uniform(
+        -link_tolerance_in,
+        link_tolerance_in,
+        (TUNING_MONTE_CARLO_TRIAL_COUNT, 2),
+    )
+    arguments = [
+        (
+            geometry,
+            nominal_report,
+            trial,
+            float(link_error_in[0]),
+            float(link_error_in[1]),
+        )
+        for trial, link_error_in in enumerate(link_errors_in)
+    ]
+    with ProcessPoolExecutor(max_workers=8) as executor:
+        return list(executor.map(_evaluate_tuning_trial, arguments, chunksize=1))
+
+
+def print_tuning_recoverability_summary(
+    rows: Sequence[dict[str, float | str | bool]],
+    link_tolerance_in: float,
+) -> None:
+    """Print post-fabrication adjustment demand and nominal-recovery coverage."""
+    valid_rows = [row for row in rows if bool(row["geometry_valid"])]
+    recovered_rows = [
+        row for row in valid_rows if bool(row["nominal_targets_recovered"])
+    ]
+    nominal_error_limit_percent = 100.0 * TUNING_NOMINAL_ERROR_LIMIT_FRACTION
+    print("\n=== POST-FABRICATION TUNING RECOVERABILITY ===")
+    print(f"Fixed upper/lower-link variation: ±{link_tolerance_in:.4f} in")
+    print(
+        "Nominal recovery means every target is within "
+        f"{nominal_error_limit_percent:.0f}% of its original rule width.",
+    )
+    valid_percent = 100.0 * len(valid_rows) / len(rows)
+    print(f"Geometrically valid after tuning: {valid_percent:.1f}%")
+    print(
+        "All targets recovered after tuning: "
+        f"{100.0 * len(recovered_rows) / len(valid_rows):.1f}%",
+    )
+    print("Adjustment                      P50 abs  P95 abs  Maximum abs")
+    for label, field in (
+        ("Upper pickup X", "upper_pickup_x_adjustment_in"),
+        ("Upper pickup Z/Y plane", "upper_pickup_plane_z_adjustment_in"),
+        ("Steering rack Y", "steering_rack_y_adjustment_in"),
+        ("Steering rack Z", "steering_rack_z_adjustment_in"),
+    ):
+        adjustments_in = np.abs([float(row[field]) for row in valid_rows])
+        print(
+            f"{label:<31} "
+            f"{np.percentile(adjustments_in, 50):7.4f}  "
+            f"{np.percentile(adjustments_in, 95):7.4f}  "
+            f"{np.max(adjustments_in):11.4f} in",
+        )
+    maximum_errors = [
+        float(row["maximum_normalized_nominal_error"]) for row in valid_rows
+    ]
+    print(
+        "Maximum normalized nominal error: "
+        f"P50 {np.percentile(maximum_errors, 50):.3f}, "
+        f"P95 {np.percentile(maximum_errors, 95):.3f}, "
+        f"worst {np.max(maximum_errors):.3f}",
+    )
 
 
 def constraint_excesses(report: SuspensionTargetReport) -> dict[str, float]:
@@ -2156,56 +2487,30 @@ def print_recommendations(
 
 
 def run_sensitivity_analysis() -> int:
-    """Run fabrication OAT and Monte Carlo analysis.
-
-    The nominal geometry is not changed.
-
-    """
+    """Run post-fabrication recoverability analysis for fixed link variation."""
     geometry = nominal_geometry()
-    nominal_evaluation = evaluate_geometry_targets(
-        geometry,
-        return_sample_states=True,
-    )
-    nominal_result, sample_states = nominal_evaluation
+    nominal_result = evaluate_geometry_targets(geometry)
     if nominal_result.report is None:
         message = "Accepted nominal geometry could not be evaluated."
         raise RuntimeError(message)
-    zero_result = evaluate_geometry_targets(
-        perturb_fabrication_parameter(geometry, "upper_in", 0.0),
-        sample_states=sample_states,
-    )
-    if zero_result.report != nominal_result.report or geometry != nominal_geometry():
-        message = "Sensitivity validation failed to preserve the nominal geometry."
-        raise RuntimeError(message)
-    one_at_a_time_rows = evaluate_one_at_a_time(
-        geometry,
-        nominal_result.report,
-        sample_states,
-        FABRICATION_TOLERANCE_IN,
-    )
-    monte_carlo_rows = run_monte_carlo(
-        geometry,
-        sample_states,
-        MONTE_CARLO_TRIAL_COUNT,
-        FABRICATION_TOLERANCE_IN,
-        MONTE_CARLO_SEED,
-    )
-    write_csv(Path("front_suspension_sensitivity_oat.csv"), one_at_a_time_rows)
-    write_csv(Path("front_suspension_sensitivity_monte_carlo.csv"), monte_carlo_rows)
-    print("Nominal kinematic sweep reused for every perturbation: PASS")
-    print("Zero perturbation reproduces nominal metrics: PASS")
-    print("Positive and negative perturbations evaluated: PASS")
-    print("Nominal geometry unchanged after analysis: PASS")
-    print_one_at_a_time_summary(one_at_a_time_rows)
-    print_monte_carlo_summary(monte_carlo_rows)
-    print_recommendations(
-        geometry,
-        nominal_result.report,
-        sample_states,
-        one_at_a_time_rows,
-    )
-    print("CSV: front_suspension_sensitivity_oat.csv")
-    print("CSV: front_suspension_sensitivity_monte_carlo.csv")
+    for link_tolerance_in, tolerance_name in (
+        (FABRICATION_TOLERANCE_GOAL_IN, "1_16"),
+        (FABRICATION_TOLERANCE_IN, "1_32"),
+    ):
+        recoverability_rows = run_tuning_recoverability_analysis(
+            geometry,
+            nominal_result.report,
+            link_tolerance_in,
+        )
+        csv_path = Path(
+            f"front_suspension_tuning_recoverability_{tolerance_name}.csv",
+        )
+        write_csv(csv_path, recoverability_rows)
+        print_tuning_recoverability_summary(
+            recoverability_rows,
+            link_tolerance_in,
+        )
+        print(f"CSV: {csv_path}")
     return 0
 
 
