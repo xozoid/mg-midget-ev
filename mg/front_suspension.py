@@ -68,14 +68,14 @@ class Geometry(NamedTuple):
     upper_in: float = 7.25
     inner_in: float = 9
     inner_angle_rad: float = float(np.deg2rad(-31.5))
-    outer_in: float = 8.25
-    caster_rad: float = float(np.deg2rad(3))
+    outer_in: float = 8.225
+    caster_rad: float = float(np.deg2rad(1.8))
 
     kingpin_upper_inward_in: float = 0.75
     kingpin_lower_inward_in: float = -1
 
     axle_length_in: float = 2.5
-    axle_kingpin_angle_rad: float = float(np.deg2rad(8))
+    axle_kingpin_angle_rad: float = float(np.deg2rad(6.5))
     axle_offset_in: float = 3.75
 
     wheel_radius_in: float = 22.6 / 2
