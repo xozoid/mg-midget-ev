@@ -1475,8 +1475,8 @@ def toe_angle_for_fixed_steering_rod_point(
 def nominal_geometry() -> Geometry:
     """Return the accepted front-suspension geometry without modifying it."""
     return Geometry(
-        lower_in=11.89218900891429,
-        upper_in=6.602495087044348,
+        lower_in=11.93218900891429,
+        upper_in=6.642495087044348,
         coilover_lower_offset_in=8.726871825785155,
         coilover_upper_x_from_lower_pickup_in=8.36515778503558,
         coilover_upper_z_from_lower_pickup_in=12.24139889398414,
