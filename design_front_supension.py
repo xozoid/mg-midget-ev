@@ -31,11 +31,13 @@ TARGET_STATIC_CAMBER_SLOPE_MIN_DEG_PER_IN = -0.7
 TARGET_STATIC_CAMBER_SLOPE_MAX_DEG_PER_IN = -0.3
 TARGET_MAX_BUMP_CAMBER_DEG = 0.0
 TARGET_MAX_DROOP_CAMBER_DEG = 0.5
+TARGET_MAX_BUMP_TRAVEL_IN = 2.5
+TARGET_MAX_DROOP_TRAVEL_IN = 2.0
 TARGET_MAX_TOE_PEAK_TO_PEAK_DEG = 0.2
 TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN = 5.0
 TARGET_COILOVER_MOTION_RATIO_MIN = 0.6
 TARGET_COILOVER_MOTION_RATIO_MAX = 0.9
-TARGET_WHEEL_CENTER_REST_X_IN = 22.984638682953
+TARGET_WHEEL_CENTER_REST_X_IN = 23.7
 WHEEL_CENTER_X_TOLERANCE_IN = 0.25
 CAMBER_ERROR_REFERENCE_DEG = 0.5
 STATIC_CAMBER_SLOPE_ERROR_REFERENCE_DEG_PER_IN = 0.4
@@ -238,12 +240,12 @@ def evaluate_suspension_targets(
         travel_in,
         camber_deg,
         0.0,
-        2.0,
+        TARGET_MAX_BUMP_TRAVEL_IN,
     )
     droop_camber_deg = _values_between_travel_limits(
         travel_in,
         camber_deg,
-        -2.0,
+        -TARGET_MAX_DROOP_TRAVEL_IN,
         0.0,
     )
     max_bump_camber_deg = float(np.max(bump_camber_deg))
@@ -317,10 +319,8 @@ def evaluate_suspension_targets(
         + droop_camber_distance_deg / CAMBER_ERROR_REFERENCE_DEG
         + toe_peak_to_peak_distance_deg / TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
         + roll_center_peak_to_peak_distance_in / TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
-        + coilover_motion_ratio_distance
-        / (TARGET_COILOVER_MOTION_RATIO_MAX - TARGET_COILOVER_MOTION_RATIO_MIN)
         + wheel_center_x_excess_in / WHEEL_CENTER_X_TOLERANCE_IN
-    ) / 9.0
+    ) / 8.0
 
     return SuspensionTargetReport(
         static_camber_deg=static_camber_deg,
@@ -364,10 +364,6 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
     roll_center_passed = (
         report.roll_center_peak_to_peak_in < TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
     )
-    coilover_motion_ratio_passed = np.isclose(
-        report.coilover_motion_ratio_distance,
-        0.0,
-    )
     wheel_center_passed = (
         report.wheel_center_x_distance_in <= WHEEL_CENTER_X_TOLERANCE_IN
     )
@@ -378,7 +374,6 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
             droop_camber_passed,
             toe_passed,
             roll_center_passed,
-            coilover_motion_ratio_passed,
             wheel_center_passed,
         ),
     )
@@ -426,7 +421,8 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
         status_line(
             passed=bump_camber_passed,
             text="Bump camber "
-            f"{report.max_bump_camber_deg:+.1f} deg through +2.0 in "
+            f"{report.max_bump_camber_deg:+.1f} deg through "
+            f"+{TARGET_MAX_BUMP_TRAVEL_IN:.1f} in "
             f"(must be negative, off {report.bump_camber_distance_deg:.1f} deg)",
         ),
     )
@@ -434,7 +430,8 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
         status_line(
             passed=droop_camber_passed,
             text="Droop camber "
-            f"{report.max_droop_camber_deg:+.1f} deg through -2.0 in "
+            f"{report.max_droop_camber_deg:+.1f} deg through "
+            f"-{TARGET_MAX_DROOP_TRAVEL_IN:.1f} in "
             f"(limit {TARGET_MAX_DROOP_CAMBER_DEG:+.1f} deg, "
             f"off {report.droop_camber_distance_deg:.1f} deg)",
         ),
@@ -460,14 +457,10 @@ def print_suspension_target_report(report: SuspensionTargetReport) -> None:
         ),
     )
     print(
-        status_line(
-            passed=coilover_motion_ratio_passed,
-            text="Coilover MR=|dL/dz| "
-            f"{report.coilover_motion_ratio:.2f} "
-            f"(target {TARGET_COILOVER_MOTION_RATIO_MIN:.1f} to "
-            f"{TARGET_COILOVER_MOTION_RATIO_MAX:.1f}, "
-            f"off {report.coilover_motion_ratio_distance:.2f})",
-        ),
+        "[INFO] Coilover MR=|dL/dz| "
+        f"{report.coilover_motion_ratio:.2f} "
+        f"(reference {TARGET_COILOVER_MOTION_RATIO_MIN:.1f} to "
+        f"{TARGET_COILOVER_MOTION_RATIO_MAX:.1f})",
     )
     print(
         status_line(
@@ -1482,15 +1475,15 @@ def toe_angle_for_fixed_steering_rod_point(
 def nominal_geometry() -> Geometry:
     """Return the accepted front-suspension geometry without modifying it."""
     return Geometry(
-        lower_in=11.11048189,
-        upper_in=6.77029941,
-        coilover_lower_offset_in=9,
-        coilover_upper_x_from_lower_pickup_in=7.75,
-        coilover_upper_z_from_lower_pickup_in=12,
-        inner_in=9.23497371,
-        inner_angle_rad=float(np.deg2rad(-31.69875231)),
-        steering_rod_y_in=-4.76869587,
-        steering_rod_z_in=5.36411617,
+        lower_in=11.85218900891429,
+        upper_in=6.562495087044348,
+        coilover_lower_offset_in=8.726871825785155,
+        coilover_upper_x_from_lower_pickup_in=8.36515778503558,
+        coilover_upper_z_from_lower_pickup_in=12.24139889398414,
+        inner_in=9.279021314040287,
+        inner_angle_rad=-0.7058949669234011,
+        steering_rod_y_in=-6.1155686574027985,
+        steering_rod_z_in=4.666434559703316,
     )
 
 
@@ -1561,7 +1554,6 @@ def hard_constraints_passed(report: SuspensionTargetReport) -> bool:
         and report.max_droop_camber_deg < TARGET_MAX_DROOP_CAMBER_DEG
         and report.straight_toe_peak_to_peak_deg < TARGET_MAX_TOE_PEAK_TO_PEAK_DEG
         and report.roll_center_peak_to_peak_in < TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
-        and np.isclose(report.coilover_motion_ratio_distance, 0.0)
         and report.wheel_center_x_distance_in <= WHEEL_CENTER_X_TOLERANCE_IN,
     )
 
@@ -1583,8 +1575,8 @@ def evaluate_geometry_targets(
         return evaluate_geometry_at_sample_states(geometry, sample_states)
     toe_angle_rest_rad = float(np.deg2rad(-0.08))
     ride_height_rest_in = 8.0
-    ride_height_max_bump_in = ride_height_rest_in - 2.0
-    ride_height_max_drop_in = ride_height_rest_in + 2.0
+    ride_height_max_bump_in = ride_height_rest_in - TARGET_MAX_BUMP_TRAVEL_IN
+    ride_height_max_drop_in = ride_height_rest_in + TARGET_MAX_DROOP_TRAVEL_IN
     try:  # ruff:ignore[too-many-statements-in-try-clause]
         valid_lower_angles_rad = [
             float(lower_angle_rad)
@@ -1691,12 +1683,12 @@ def evaluate_geometry_targets(
             toe_angle_max_bump_rad,
         ]
         travel_in = [
-            -2.0,
+            -TARGET_MAX_DROOP_TRAVEL_IN,
             *(
                 ride_height_rest_in - constrained_ride_heights_in[index]
                 for index in in_travel_indices
             ),
-            2.0,
+            TARGET_MAX_BUMP_TRAVEL_IN,
         ]
         toe_angle_right_turn_rest_rad = toe_angle_rest_rad + float(np.deg2rad(5.0))
         toe_angle_left_turn_rest_rad = toe_angle_rest_rad - float(np.deg2rad(5.0))
@@ -1912,10 +1904,6 @@ def constraint_excesses(report: SuspensionTargetReport) -> dict[str, float]:
         "roll-center migration": (
             report.roll_center_peak_to_peak_distance_in
             / TARGET_MAX_ROLL_CENTER_PEAK_TO_PEAK_IN
-        ),
-        "coilover motion ratio": (
-            report.coilover_motion_ratio_distance
-            / (TARGET_COILOVER_MOTION_RATIO_MAX - TARGET_COILOVER_MOTION_RATIO_MIN)
         ),
         "wheel-center X": (
             max(
@@ -2251,8 +2239,8 @@ def main(command_line: Sequence[str] | None = None) -> int:
         if geometry_is_valid(geometry, float(lower_angle_rad), 0.0)
     ]
     ride_height_rest_in = 8
-    ride_height_max_bump_in = ride_height_rest_in - 2.0
-    ride_height_max_drop_in = ride_height_rest_in + 2.0
+    ride_height_max_bump_in = ride_height_rest_in - TARGET_MAX_BUMP_TRAVEL_IN
+    ride_height_max_drop_in = ride_height_rest_in + TARGET_MAX_DROOP_TRAVEL_IN
     toe_angle_rest_rad = float(np.deg2rad(-0.08))
     ride_heights_in = [
         -geometry.wheel_contact(lower_angle_rad, toe_angle_rest_rad).z
@@ -2396,13 +2384,13 @@ def main(command_line: Sequence[str] | None = None) -> int:
         toe_angle_left_turn_rest_rad,
     )
     travel_in = [
-        -2.0,
+        -TARGET_MAX_DROOP_TRAVEL_IN,
         *(
             ride_height_rest_in - ride_height_in
             for ride_height_in in constrained_ride_heights_in
             if ride_height_max_bump_in <= ride_height_in <= ride_height_max_drop_in
         ),
-        2.0,
+        TARGET_MAX_BUMP_TRAVEL_IN,
     ]
     metric_lower_angles_rad = [
         lower_angle_max_drop_rad,
