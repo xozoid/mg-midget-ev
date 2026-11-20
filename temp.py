@@ -14,6 +14,7 @@ def main() -> None:
     fixed.plot(Path("front_suspension_geometry.png"))
 
     sweeper = SuspensionSweep(fixed)
+    sweeper.report()
     sweeper.plot(Path("front_suspension_sweep.png"))
 
 

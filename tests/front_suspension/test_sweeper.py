@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
+from io import StringIO
+
+from colorama import Fore, Style
 
 from mg.front_suspension.geometry import GeometryFixed, Solver
 from mg.front_suspension.sweeper import SuspensionSweep
@@ -11,6 +15,19 @@ from mg.front_suspension.utils import Point
 
 class TestSuspensionTargets(unittest.TestCase):
     """Check target evaluation using the suspension solver."""
+
+    def test_report_prints_measured_targets_with_status_colors(self) -> None:
+        sweep = SuspensionSweep(GeometryFixed())
+        output = StringIO()
+
+        with redirect_stdout(output):
+            sweep.report()
+
+        report = output.getvalue()
+        self.assertIn(f"{Fore.RED}[FAIL]{Style.RESET_ALL} Static camber:", report)
+        self.assertIn(f"{Fore.GREEN}[PASS]{Style.RESET_ALL} Bump steer", report)
+        self.assertIn(f"{Fore.BLUE}0.125{Style.RESET_ALL} deg", report)
+        self.assertIn(f"target <= {Fore.MAGENTA}0.200{Style.RESET_ALL} deg", report)
 
     def test_target_tests_ignore_sample_order(self) -> None:
         sweep = SuspensionSweep(GeometryFixed(), bump_range=[-2.0, -1.0, 1.0, 2.5])
