@@ -9,7 +9,15 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 
-from mg.front_suspension.constraints import MIN_BUMP, MIN_DROOP, MIN_LEFT, MIN_RIGHT
+from mg.front_suspension.constraints import (
+    BUMP,
+    BUMP_CAMBER_MAX,
+    BUMP_STEER_PP,
+    DROOP_CAMBER_MAX,
+    STATIC_CAMBER,
+    STEERING,
+    WHEEL_CENTER_X,
+)
 from mg.front_suspension.geometry import GeometryFixed, Solver
 
 if TYPE_CHECKING:
@@ -22,16 +30,42 @@ N = 31
 
 
 @dataclass(frozen=True)
+class SuspensionTargetTests:
+    """Pass or fail results for the suspension targets."""
+
+    static_camber: bool
+    camber_slope: bool
+    bump_camber_monotonic: bool
+    bump_camber: bool
+    droop_camber: bool
+    bump_steer: bool
+    wheel_center: bool
+
+    @property
+    def hard_constraints_passed(self) -> bool:
+        """Whether all hard design constraints pass."""
+        return all(
+            (
+                self.static_camber,
+                self.bump_camber,
+                self.droop_camber,
+                self.bump_steer,
+                self.wheel_center,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class SuspensionSweep:
     """Evaluate suspension geometry over travel and steering ranges."""
 
     geometry: GeometryFixed
 
     bump_range: list[float] = field(
-        default_factory=lambda: list(np.linspace(MIN_DROOP, MIN_BUMP, N, dtype=float)),
+        default_factory=lambda: list(np.linspace(*BUMP, N, dtype=float)),
     )
     steering_range: list[float] = field(
-        default_factory=lambda: list(np.linspace(MIN_LEFT, MIN_RIGHT, N, dtype=float)),
+        default_factory=lambda: list(np.linspace(*STEERING, N, dtype=float)),
     )
 
     @cached_property
@@ -84,6 +118,67 @@ class SuspensionSweep:
         axes[1, 1].plot(self.steering_range, [s.toe.deg for s in self.steering])
         axes[1, 1].set_title("Steering response")
         axes[1, 1].set_ylabel("Toe (deg)")
+
+        camber_ax = axes[0, 0]
+        # NOTE: The camber ceiling changes at rest height; static targets only
+        # apply at zero travel, not across the full sweep.
+        for start_in, end_in, limit_deg, label in (
+            (BUMP[0], 0, DROOP_CAMBER_MAX.deg, "Droop camber maximum"),
+            (0, BUMP[1], BUMP_CAMBER_MAX.deg, "Bump camber maximum"),
+        ):
+            camber_ax.plot(
+                [start_in, end_in],
+                [limit_deg, limit_deg],
+                color="tab:red",
+                linestyle="--",
+                label=label,
+            )
+        camber_ax.plot(
+            [0, 0],
+            [angle.deg for angle in STATIC_CAMBER],
+            color="tab:green",
+            linewidth=4,
+            label="Static camber target",
+        )
+        camber_ylim = camber_ax.get_ylim()
+        for start_in, end_in, limit_deg in (
+            (BUMP[0], 0, DROOP_CAMBER_MAX.deg),
+            (0, BUMP[1], BUMP_CAMBER_MAX.deg),
+        ):
+            if camber_ylim[1] > limit_deg:
+                camber_ax.fill_between(
+                    [start_in, end_in],
+                    limit_deg,
+                    camber_ylim[1],
+                    color="tab:red",
+                    alpha=0.08,
+                )
+        camber_ax.set_ylim(camber_ylim)
+
+        toe_ax = axes[0, 1]
+        toe_midpoint_deg = (min(self.bump_steer) + max(self.bump_steer)) / 2
+        toe_min_deg = toe_midpoint_deg - BUMP_STEER_PP.deg / 2
+        toe_max_deg = toe_midpoint_deg + BUMP_STEER_PP.deg / 2
+        for limit_deg in (toe_min_deg, toe_max_deg):
+            toe_ax.axhline(limit_deg, color="tab:red", linestyle="--")
+        toe_ax.axhspan(
+            toe_min_deg,
+            toe_max_deg,
+            color="tab:green",
+            alpha=0.08,
+            label="Bump steer peak-to-peak limit",
+        )
+
+        axes[1, 0].plot(
+            [0, 0],
+            WHEEL_CENTER_X,
+            color="tab:green",
+            linewidth=4,
+            label="Static wheel center target",
+        )
+        for ax in (camber_ax, toe_ax, axes[1, 0]):
+            ax.axvline(0, color="0.5", linestyle=":", linewidth=0.8)
+            ax.legend(fontsize="small")
 
         for ax in (axes[0, 0], axes[0, 1], axes[1, 0]):
             ax.set_xlabel("Bump travel (in)")

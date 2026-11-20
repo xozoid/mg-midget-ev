@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 
-from mg.front_suspension.constraints import MIN_BUMP, MIN_DROOP
+from mg.front_suspension.constraints import BUMP
 from mg.front_suspension.plot_utils import PlotUtils
 from mg.front_suspension.utils import Angle, DEFAULT_TOL, HALF_PI, Point
 
@@ -56,7 +56,7 @@ class SuspensionState:
     @cached_property
     def camber(self) -> Angle:
         """The wheel camber angle."""
-        return Angle.atan(self.axle_axis.z, self.axle_axis.x)
+        return -Angle.atan(self.axle_axis.z, self.axle_axis.x)
 
     @cached_property
     def caster(self) -> Angle:
@@ -256,8 +256,8 @@ class GeometryFixed:
         self,
         path: Path,
         *,
-        droop: float = MIN_DROOP,
-        bump: float = MIN_BUMP,
+        droop: float = BUMP[0],
+        bump: float = BUMP[1],
     ) -> None:
         """Save suspension geometry plots at rest, droop, and bump."""
         states = {

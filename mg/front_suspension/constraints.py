@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
-MIN_DROOP = -2
-MIN_BUMP = 2.5
+from mg.front_suspension.utils import Angle
 
-MIN_STEERING_SPAN = 4
-MIN_LEFT = -MIN_STEERING_SPAN / 2
-MIN_RIGHT = MIN_STEERING_SPAN / 2
+BUMP = (-2, 2.5)
+STEERING = (-2, 2)
+
+STATIC_CAMBER = (Angle.from_deg(-1), Angle.from_deg(-0.5))
+STATIC_CAMBER_SLOPE = (Angle.from_deg(-0.7), Angle.from_deg(-0.3))
+BUMP_CAMBER_MAX = Angle.from_deg(0)
+DROOP_CAMBER_MAX = Angle.from_deg(0.5)
+
+BUMP_STEER_PP = Angle.from_deg(0.2)
+COILOVER_MOTION_RATIO = (0.6, 0.9)
+
+_WHEEL_CENTER_X_NOMINAL = 23.7
+_WHEEL_CENTER_X_TOL = 0.25
+WHEEL_CENTER_X = (
+    _WHEEL_CENTER_X_NOMINAL - _WHEEL_CENTER_X_TOL,
+    _WHEEL_CENTER_X_NOMINAL + _WHEEL_CENTER_X_TOL,
+)
