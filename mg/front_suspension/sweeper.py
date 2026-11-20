@@ -16,6 +16,7 @@ from mg.front_suspension.constraints import (
     BUMP_CAMBER_MAX,
     BUMP_STEER_PP,
     DROOP_CAMBER_MAX,
+    ROLL_CENTER_PP,
     STATIC_CAMBER,
     STATIC_CAMBER_SLOPE,
     STEERING,
@@ -43,6 +44,7 @@ class SuspensionTargetValues:
     droop_camber_max_deg: float
     bump_steer_pp_deg: float
     wheel_center_x_in: float
+    roll_center_pp_in: float
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,7 @@ class SuspensionTargetTests:
     droop_camber: bool
     bump_steer: bool
     wheel_center: bool
+    roll_center: bool
 
     @property
     def hard_constraints_passed(self) -> bool:
@@ -67,6 +70,7 @@ class SuspensionTargetTests:
                 self.droop_camber,
                 self.bump_steer,
                 self.wheel_center,
+                self.roll_center,
             ),
         )
 
@@ -114,6 +118,11 @@ class SuspensionSweep:
         return [s.wheel_contact.x for s in self.bump]
 
     @cached_property
+    def roll_center(self) -> list[float]:
+        """Roll-center heights above ground in inches over wheel travel."""
+        return [s.roll_center.z - s.wheel_contact.z for s in self.bump]
+
+    @cached_property
     def target_values(self) -> SuspensionTargetValues:
         """Measure the sampled sweep over the target travel range.
 
@@ -133,6 +142,7 @@ class SuspensionSweep:
         camber_deg = np.asarray(self.camber)[order]
         toe_deg = np.asarray(self.bump_steer)[order]
         center_x_in = np.asarray(self.lateral_scrub)[order]
+        roll_center_in = np.asarray(self.roll_center)[order]
 
         # NOTE: Interpolated endpoints keep extra travel outside the target range
         # from changing the result and include rest when it was not sampled.
@@ -174,6 +184,7 @@ class SuspensionSweep:
             droop_camber_max_deg=float(np.max(droop_camber_deg)),
             bump_steer_pp_deg=float(np.ptp(toe_range_deg)),
             wheel_center_x_in=static_center_x_in,
+            roll_center_pp_in=float(np.ptp(interval_values(roll_center_in, *BUMP))),
         )
 
     @cached_property
@@ -195,6 +206,7 @@ class SuspensionSweep:
             bump_camber=values.bump_camber_max_deg <= BUMP_CAMBER_MAX.deg,
             droop_camber=values.droop_camber_max_deg <= DROOP_CAMBER_MAX.deg,
             bump_steer=values.bump_steer_pp_deg <= BUMP_STEER_PP.deg,
+            roll_center=values.roll_center_pp_in <= ROLL_CENTER_PP,
             wheel_center=WHEEL_CENTER_X[0]
             <= values.wheel_center_x_in
             <= WHEEL_CENTER_X[1],
@@ -268,6 +280,12 @@ class SuspensionSweep:
             f"<= {BUMP_STEER_PP.deg:.3f} deg",
         )
         line(
+            tests.roll_center,
+            "Roll center peak-to-peak",
+            f"{values.roll_center_pp_in:6.3f} in",
+            f"<= {ROLL_CENTER_PP:.3f} in",
+        )
+        line(
             tests.wheel_center,
             "Static wheel center X",
             f"{values.wheel_center_x_in:6.3f} in",
@@ -279,7 +297,7 @@ class SuspensionSweep:
         path: Path,
     ) -> None:
         """Save suspension responses to bump travel and steering rack movement."""
-        fig, axes = plt.subplots(2, 2, figsize=(12, 9), constrained_layout=True)
+        fig, axes = plt.subplots(3, 2, figsize=(12, 13), constrained_layout=True)
         axes[0, 0].plot(self.bump_range, self.camber)
         axes[0, 0].set_title("Camber")
         axes[0, 0].set_ylabel("Camber (deg)")
@@ -295,6 +313,27 @@ class SuspensionSweep:
         axes[1, 1].plot(self.steering_range, [s.toe.deg for s in self.steering])
         axes[1, 1].set_title("Steering response")
         axes[1, 1].set_ylabel("Toe (deg)")
+
+        roll_ax = axes[2, 0]
+        roll_ax.plot(self.bump_range, self.roll_center)
+        roll_ax.set_title("Roll center")
+        roll_ax.set_ylabel("Height above ground (in)")
+        roll_ax.set_xlabel("Bump travel (in)")
+        roll_midpoint_in = (min(self.roll_center) + max(self.roll_center)) / 2
+        rc_min = roll_midpoint_in - ROLL_CENTER_PP / 2
+        rc_max = roll_midpoint_in + ROLL_CENTER_PP / 2
+        roll_ax.axhspan(
+            rc_min,
+            rc_max,
+            color="tab:green",
+            alpha=0.08,
+            label="Roll center peak-to-peak limit",
+        )
+        roll_ax.axhline(rc_min, color="tab:red", linestyle="--")
+        roll_ax.axhline(rc_max, color="tab:red", linestyle="--")
+        roll_ax.axvline(0, color="0.5", linestyle=":", linewidth=0.8)
+        roll_ax.legend(fontsize="small")
+        axes[2, 1].set_visible(False)
 
         camber_ax = axes[0, 0]
         # NOTE: The camber ceiling changes at rest height; static targets only
@@ -379,3 +418,4 @@ class SuspensionSweep:
         for ax in axes.flat:
             ax.grid(visible=True, alpha=0.3)
         fig.savefig(path, dpi=200)
+        plt.close(fig)

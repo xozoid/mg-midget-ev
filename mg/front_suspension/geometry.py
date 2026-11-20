@@ -49,6 +49,55 @@ class SuspensionState:
     kp_axis: Point  # unit vector originating at axle_center, pointing upward
 
     @cached_property
+    def _instant_center_homogeneous(self) -> np.ndarray:
+        lower = np.cross([self.lp.x, self.lp.z, 1], [self.lf.x, self.lf.z, 1])
+        upper = np.cross([self.up.x, self.up.z, 1], [self.uf.x, self.uf.z, 1])
+        return np.cross(lower, upper)
+
+    @cached_property
+    def instant_center(self) -> Point:
+        """The front-view arm intersection, on the lower arm's line.
+
+        Raises:
+            ValueError: If the projected arms have no unique finite intersection.
+
+        """
+        instant = self._instant_center_homogeneous
+        if np.isclose(instant[2], 0):
+            msg = "Instant center has no unique finite position"
+            raise ValueError(msg)
+        x_in = float(instant[0] / instant[2])
+        z_in = float(instant[1] / instant[2])
+        arm = self.lf - self.lp
+        # NOTE: Use the larger projected component to avoid dividing by a
+        # nearly vertical or horizontal arm component.
+        fraction = (
+            (x_in - self.lp.x) / arm.x
+            if abs(arm.x) >= abs(arm.z)
+            else (z_in - self.lp.z) / arm.z
+        )
+        return Point(x_in, self.lp.y + fraction * arm.y, z_in)
+
+    @cached_property
+    def roll_center(self) -> Point:
+        """The symmetric roll center from the front-view arm intersections.
+
+        Raises:
+            ValueError: If the roll center is undefined.
+
+        """
+        instant = self._instant_center_homogeneous
+        contact = self.wheel_contact
+        denominator = contact.x * instant[2] - instant[0]
+        # NOTE: Homogeneous coordinates also handle parallel arms, whose
+        # instant center is at infinity but whose roll center can be finite.
+        if np.isclose(denominator, 0):
+            msg = "Roll center is undefined for this suspension geometry"
+            raise ValueError(msg)
+        height_in = (contact.x * instant[1] - contact.z * instant[0]) / denominator
+        return Point(0, contact.y, float(height_in))
+
+    @cached_property
     def kpi(self) -> Angle:
         """The kingpin inclination."""
         return Angle.atan(-self.kp_axis.x, self.kp_axis.z)
@@ -69,7 +118,14 @@ class SuspensionState:
         """The wheel toe angle."""
         return Angle.atan(self.axle_axis.y, self.axle_axis.x)
 
-    def plot(self, ax: Axes, projection: str, **kwargs: object) -> None:
+    def plot(
+        self,
+        ax: Axes,
+        projection: str,
+        *,
+        roll_center_construction: bool = True,
+        **kwargs: object,
+    ) -> None:
         """Plot the suspension on the requested projection."""
         plt = PlotUtils(ax, projection, **kwargs)
         plt.poly(self.lp, self.lf, self.uf, self.up)
@@ -83,6 +139,18 @@ class SuspensionState:
         plt.line(self.axle_center, self.wheel_center, linestyle=":")
         plt.ellipse(self.wheel_center, self.axle_axis, self.wheel_r)
         plt.line(self.rack, self.tie_rod, linestyle=":")
+        plt.line(self.roll_center, self.roll_center, marker="o", linestyle="none")
+        # NOTE: Parallel arms have an instant center at infinity, so there
+        # is no finite construction point to draw.
+        if roll_center_construction and not np.isclose(
+            self._instant_center_homogeneous[2],
+            0,
+        ):
+            instant = self.instant_center
+            plt.line(self.lp, instant, linestyle="--")
+            plt.line(self.up, instant, linestyle="--")
+            plt.line(instant, self.wheel_contact, linestyle="--")
+            plt.line(instant, instant, marker="o", linestyle="none")
 
     @cached_property
     def world(self) -> SuspensionState:
@@ -104,7 +172,6 @@ class SuspensionState:
 
 @dataclass(frozen=True)
 class FourBar:
-
     # Inputs
     """A planar four-bar linkage."""
 
@@ -258,6 +325,7 @@ class GeometryFixed:
         *,
         droop: float = BUMP[0],
         bump: float = BUMP[1],
+        roll_center_construction: bool = False,
     ) -> None:
         """Save suspension geometry plots at rest, droop, and bump."""
         states = {
@@ -268,12 +336,48 @@ class GeometryFixed:
         fig, ax = plt.subplots(2, 3, figsize=(20, 10), constrained_layout=True)
         for label, (height, color) in states.items():
             state = Solver.at(self, height)
-            state.plot(ax[0, 0], "XZ", label=label, color=color)
-            state.plot(ax[0, 1], "-YZ", label=label, color=color)
-            state.plot(ax[0, 2], "-XY", label=label, color=color)
-            state.world.plot(ax[1, 0], "XZ", label=label, color=color)
-            state.world.plot(ax[1, 1], "-YZ", label=label, color=color)
-            state.world.plot(ax[1, 2], "-XY", label=label, color=color)
+            state.plot(
+                ax[0, 0],
+                "XZ",
+                label=label,
+                color=color,
+                roll_center_construction=roll_center_construction,
+            )
+            state.plot(
+                ax[0, 1],
+                "-YZ",
+                label=label,
+                color=color,
+                roll_center_construction=roll_center_construction,
+            )
+            state.plot(
+                ax[0, 2],
+                "-XY",
+                label=label,
+                color=color,
+                roll_center_construction=roll_center_construction,
+            )
+            state.world.plot(
+                ax[1, 0],
+                "XZ",
+                label=label,
+                color=color,
+                roll_center_construction=roll_center_construction,
+            )
+            state.world.plot(
+                ax[1, 1],
+                "-YZ",
+                label=label,
+                color=color,
+                roll_center_construction=roll_center_construction,
+            )
+            state.world.plot(
+                ax[1, 2],
+                "-XY",
+                label=label,
+                color=color,
+                roll_center_construction=roll_center_construction,
+            )
 
         for axes, title, xlabel, ylabel in (
             (ax[0, 0], "Chassis: front view", "X (in)", "Z (in)"),
