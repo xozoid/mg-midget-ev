@@ -64,19 +64,19 @@ class Geometry(NamedTuple):
     """Fixed dimensions and angles for one side of the front suspension."""
 
     lower_in: float = 10.75
-    lower_pickup_width_in: float = 18
+    lower_pickup_width_in: float = 18.194
     upper_in: float = 7.25
     inner_in: float = 9
     inner_angle_rad: float = float(np.deg2rad(-31.5))
-    outer_in: float = 8.225
+    outer_in: float = 8.228
     caster_rad: float = float(np.deg2rad(1.8))
 
     kingpin_upper_inward_in: float = 0.75
     kingpin_lower_inward_in: float = -1
 
-    axle_length_in: float = 2.5
+    axle_length_in: float = 3.092
     axle_kingpin_angle_rad: float = float(np.deg2rad(6.5))
-    axle_offset_in: float = 3.75
+    axle_offset_in: float = 3.678
 
     wheel_radius_in: float = 22.6 / 2
 
@@ -85,10 +85,13 @@ class Geometry(NamedTuple):
     tie_rod_forward_in: float = 5
 
     tie_rod_link_in: float = 8
-    steering_rod_y_in: float = -4.5
+    steering_rack_length_in: float = 27.0
+    toe_angle_rest_rad: float = float(np.deg2rad(-0.08))
+    steering_rod_y_in: float = -4.728
     steering_rod_z_in: float = 5
 
-    coilover_lower_offset_in: float = 10.75 * 2.0 / 3.0
+    coilover_lower_offset_x_in: float = 10.75 * 2.0 / 3.0
+    coilover_lower_offset_z_in: float = -0.590
     coilover_upper_x_from_lower_pickup_in: float = float(
         -9.0 * np.sin(np.deg2rad(-31.5)) + 3.0,
     )
@@ -163,7 +166,10 @@ class Geometry(NamedTuple):
         )
 
     def coilover_lower_mount(self, lower_angle_rad: float) -> Point:
-        """Return the lower coilover mount at its offset along the lower arm.
+        """Return the lower coilover mount at its arm-local X and Z offsets.
+
+        X runs along the arm toward the trunnion; Z is perpendicular to the arm
+        in the suspension plane, positive above the arm.
 
         Args:
             lower_angle_rad: Lower control-arm angle in radians.
@@ -172,12 +178,20 @@ class Geometry(NamedTuple):
             Lower coilover mount point in inches.
 
         """
-        lower_pickup_point = self.lower_pickup()
-        lower_arm_vector = self.lower_trunnion(lower_angle_rad) - lower_pickup_point
-        return lower_pickup_point + Point(
-            lower_arm_vector.x * self.coilover_lower_offset_in / self.lower_in,
-            lower_arm_vector.y * self.coilover_lower_offset_in / self.lower_in,
-            lower_arm_vector.z * self.coilover_lower_offset_in / self.lower_in,
+        cosine = float(np.cos(lower_angle_rad))
+        sine = float(np.sin(lower_angle_rad))
+        x_in = (
+            self.coilover_lower_offset_x_in * cosine
+            - self.coilover_lower_offset_z_in * sine
+        )
+        plane_z_in = (
+            self.coilover_lower_offset_x_in * sine
+            + self.coilover_lower_offset_z_in * cosine
+        )
+        return self.lower_pickup() + Point(
+            x_in,
+            plane_z_in * self.caster_sin,
+            plane_z_in * self.caster_cos,
         )
 
     def coilover_upper_mount(self) -> Point:
@@ -536,31 +550,15 @@ class Geometry(NamedTuple):
             + self.tie_rod_forward_in * wheel_forward_unit_z,
         )
 
-    def steering_rod_link_point(
-        self,
-        lower_angle_rad: float,
-        toe_angle_rad: float,
-    ) -> Point:
-        """Return the tie-rod link point on the positive-x steering rod.
-
-        The steering rod is parallel to the x axis at fixed longitudinal and
-        vertical coordinates. The returned point is the inboard endpoint of the
-        fixed-length tie-rod link.
+    def steering_rack_pivot(self, rack_displacement_in: float = 0.0) -> Point:
+        """Calculate the positive-side inner tie-rod pivot at a rack displacement.
 
         Returns:
-            The steering-rod link point in inches.
+            The inner tie-rod pivot.
 
         """
-        tie_rod_point = self.tie_rod_point(lower_angle_rad, toe_angle_rad)
-        steering_rod_link_point_x_in = tie_rod_point.x - float(
-            np.sqrt(
-                self.tie_rod_link_in**2
-                - (tie_rod_point.y - self.steering_rod_y_in) ** 2
-                - (tie_rod_point.z - self.steering_rod_z_in) ** 2,
-            ),
-        )
         return Point(
-            steering_rod_link_point_x_in,
+            self.steering_rack_length_in / 2.0 + rack_displacement_in,
             self.steering_rod_y_in,
             self.steering_rod_z_in,
         )
