@@ -267,7 +267,10 @@ def detect_trials(
 
     """
     t = location["Time (s)"].to_numpy(float)
-    speed_mph = location["Velocity (m/s)"].to_numpy(float) * MPH_PER_MPS
+    speed_mph = cast(
+        "NDArray[np.float64]",
+        location["Velocity (m/s)"].to_numpy(float) * MPH_PER_MPS,
+    )
 
     dt = np.nanmedian(np.diff(t))
     if not np.isfinite(dt) or dt <= 0:
@@ -430,7 +433,12 @@ def main() -> None:
 
         # A simple quality measure: fraction of successive GPS samples that
         # decrease. Small increases are normal at 1 Hz due to GPS noise.
-        dv = np.diff(segment["speed_mph"].to_numpy(float))
+        dv = np.diff(
+            cast(
+                "NDArray[np.float64]",
+                segment["speed_mph"].to_numpy(float),
+            ),
+        )
         monotonic_fraction = (
             float(np.mean(dv <= GPS_NOISE_INCREASE_MPH)) if len(dv) else float("nan")
         )

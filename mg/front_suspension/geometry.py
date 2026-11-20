@@ -10,13 +10,17 @@ from dataclasses import dataclass, field, replace
 from functools import cached_property
 from typing import TYPE_CHECKING
 
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 
+from mg.front_suspension.constraints import MIN_BUMP, MIN_DROOP
 from mg.front_suspension.plot_utils import PlotUtils
 from mg.front_suspension.utils import Angle, DEFAULT_TOL, HALF_PI, Point
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from matplotlib.axes import Axes
 
 
@@ -247,6 +251,47 @@ class GeometryFixed:
             msg = "Kingpin offsets exceed fulcrum separation"
             raise ValueError(msg)
         return Angle.asin(x / self.arm_outer)
+
+    def plot(
+        self,
+        path: Path,
+        *,
+        droop: float = MIN_DROOP,
+        bump: float = MIN_BUMP,
+    ) -> None:
+        """Save suspension geometry plots at rest, droop, and bump."""
+        states = {
+            "rest": (0, "green"),
+            "droop": (droop, "orange"),
+            "bump": (bump, "red"),
+        }
+        fig, ax = plt.subplots(2, 3, figsize=(20, 10), constrained_layout=True)
+        for label, (height, color) in states.items():
+            state = Solver.at(self, height)
+            state.plot(ax[0, 0], "XZ", label=label, color=color)
+            state.plot(ax[0, 1], "-YZ", label=label, color=color)
+            state.plot(ax[0, 2], "-XY", label=label, color=color)
+            state.world.plot(ax[1, 0], "XZ", label=label, color=color)
+            state.world.plot(ax[1, 1], "-YZ", label=label, color=color)
+            state.world.plot(ax[1, 2], "-XY", label=label, color=color)
+
+        for axes, title, xlabel, ylabel in (
+            (ax[0, 0], "Chassis: front view", "X (in)", "Z (in)"),
+            (ax[0, 1], "Chassis: side view", "-Y (in)", "Z (in)"),
+            (ax[0, 2], "Chassis: top view", "-X (in)", "Y (in)"),
+            (ax[1, 0], "Ground: front view", "X (in)", "Z (in)"),
+            (ax[1, 1], "Ground: side view", "-Y (in)", "Z (in)"),
+            (ax[1, 2], "Ground: top view", "-X (in)", "Y (in)"),
+        ):
+            axes.set_title(title)
+            axes.set_xlabel(xlabel)
+            axes.set_ylabel(ylabel)
+            axes.set_aspect("equal", adjustable="box")
+            axes.grid(visible=True, alpha=0.3)
+            axes.legend()
+        fig.savefig(path, dpi=200)
+        plt.close(fig)
+        print(f"Saved {path}")
 
 
 @dataclass(frozen=True)
