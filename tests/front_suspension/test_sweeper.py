@@ -26,8 +26,50 @@ class TestSuspensionTargets(unittest.TestCase):
         report = output.getvalue()
         self.assertIn(f"{Fore.RED}[FAIL]{Style.RESET_ALL} Static camber ", report)
         self.assertIn(f"{Fore.GREEN}[PASS]{Style.RESET_ALL} Bump steer", report)
+        self.assertIn(f"{Fore.RED}[FAIL]{Style.RESET_ALL} Static toe", report)
         self.assertIn(f"{Fore.BLUE}0.125{Style.RESET_ALL} deg", report)
         self.assertIn(f"target <= {Fore.MAGENTA}0.200{Style.RESET_ALL} deg", report)
+
+    def test_static_toe_is_measured_at_rest(self) -> None:
+        sweep = SuspensionSweep(GeometryFixed(), bump_range=[-2.0, 0.0, 2.5])
+
+        actual = sweep.target_values.static_toe_deg
+
+        self.assertAlmostEqual(actual, Solver.at(sweep.geometry, 0).toe.deg)
+
+    def test_static_toe_is_a_hard_constraint(self) -> None:
+        sweep = SuspensionSweep(GeometryFixed())
+        result = replace(
+            sweep.target_tests,
+            static_camber=True,
+            bump_camber=True,
+            droop_camber=True,
+            bump_steer=True,
+            wheel_center=True,
+        )
+
+        passed = result.hard_constraints_passed
+
+        self.assertFalse(result.static_toe)
+        self.assertFalse(passed)
+
+    def test_static_toe_limits_are_inclusive(self) -> None:
+        sweep = SuspensionSweep(GeometryFixed())
+        values = sweep.target_values
+
+        for toe_deg, expected in (
+            (-0.13, True),
+            (-0.03, True),
+            (-0.131, False),
+            (-0.029, False),
+        ):
+            with self.subTest(toe_deg=toe_deg):
+                sample = SuspensionSweep(GeometryFixed())
+                sample.__dict__["target_values"] = replace(
+                    values,
+                    static_toe_deg=toe_deg,
+                )
+                self.assertEqual(sample.target_tests.static_toe, expected)
 
     def test_target_tests_ignore_sample_order(self) -> None:
         sweep = SuspensionSweep(GeometryFixed(), bump_range=[-2.0, -1.0, 1.0, 2.5])
@@ -77,6 +119,7 @@ class TestSuspensionTargets(unittest.TestCase):
             replace(
                 result,
                 static_camber=True,
+                static_toe=True,
                 bump_camber=True,
                 droop_camber=True,
                 bump_steer=True,

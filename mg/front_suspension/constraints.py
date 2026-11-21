@@ -12,6 +12,8 @@ STATIC_CAMBER_SLOPE = (Angle.from_deg(-0.7), Angle.from_deg(-0.3))
 BUMP_CAMBER_MAX = Angle.from_deg(0)
 DROOP_CAMBER_MAX = Angle.from_deg(0.5)
 
+STATIC_TOE = (Angle.from_deg(-0.13), Angle.from_deg(-0.03))
+
 ROLL_CENTER_PP = 2.0
 BUMP_STEER_PP = Angle.from_deg(0.2)
 COILOVER_MOTION_RATIO = (0.6, 0.9)

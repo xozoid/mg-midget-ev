@@ -19,6 +19,7 @@ from mg.front_suspension.constraints import (
     ROLL_CENTER_PP,
     STATIC_CAMBER,
     STATIC_CAMBER_SLOPE,
+    STATIC_TOE,
     STEERING,
     WHEEL_CENTER_X,
 )
@@ -38,6 +39,7 @@ class SuspensionTargetValues:
     """Measured values used to evaluate the suspension targets."""
 
     static_camber_deg: float
+    static_toe_deg: float
     camber_slope_deg_per_in: float
     bump_camber_increase_deg: float
     bump_camber_max_deg: float
@@ -52,6 +54,7 @@ class SuspensionTargetTests:
     """Pass or fail results for the suspension targets."""
 
     static_camber: bool
+    static_toe: bool
     camber_slope: bool
     bump_camber_monotonic: bool
     bump_camber: bool
@@ -66,6 +69,7 @@ class SuspensionTargetTests:
         return all(
             (
                 self.static_camber,
+                self.static_toe,
                 self.bump_camber,
                 self.droop_camber,
                 self.bump_steer,
@@ -177,6 +181,7 @@ class SuspensionSweep:
         static_center_x_in = float(np.interp(0, travel_in, center_x_in))
         return SuspensionTargetValues(
             static_camber_deg=static_camber_deg,
+            static_toe_deg=float(np.interp(0, travel_in, toe_deg)),
             camber_slope_deg_per_in=float(slope_deg_per_in),
             bump_camber_increase_deg=float(max(0.0, np.max(np.diff(bump_camber_deg)))),
             bump_camber_max_deg=float(np.max(bump_camber_deg)),
@@ -195,6 +200,9 @@ class SuspensionSweep:
                 STATIC_CAMBER[0].deg
                 <= values.static_camber_deg
                 <= STATIC_CAMBER[1].deg,
+            ),
+            static_toe=bool(
+                STATIC_TOE[0].deg <= values.static_toe_deg <= STATIC_TOE[1].deg,
             ),
             camber_slope=bool(
                 STATIC_CAMBER_SLOPE[0].deg
@@ -238,7 +246,7 @@ class SuspensionSweep:
             )
             print(
                 f"{color}[{status}]{Style.RESET_ALL} "
-                f"{name:30}: {actual} (target {target})",
+                f"{name:35}: {actual} (target {target})",
             )
 
         line(
@@ -246,6 +254,12 @@ class SuspensionSweep:
             "Static camber",
             f"{values.static_camber_deg:6.3f} deg",
             f"{STATIC_CAMBER[0].deg:.3f} to {STATIC_CAMBER[1].deg:.3f} deg",
+        )
+        line(
+            tests.static_toe,
+            "Static toe",
+            f"{values.static_toe_deg:6.3f} deg",
+            f"{STATIC_TOE[0].deg:.3f} to {STATIC_TOE[1].deg:.3f} deg",
         )
         line(
             tests.camber_slope,

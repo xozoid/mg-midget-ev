@@ -30,6 +30,7 @@ SearchRow = TypedDict(
         "solvable": bool,
         "pass": bool,
         "static_camber_deg": NotRequired[float],
+        "static_toe_deg": NotRequired[float],
         "camber_slope_deg_per_in": NotRequired[float],
         "bump_camber_increase_deg": NotRequired[float],
         "bump_camber_max_deg": NotRequired[float],
@@ -157,6 +158,7 @@ def evaluate(combination: tuple[float, ...]) -> SearchRow:
         pass
     else:
         row["static_camber_deg"] = values.static_camber_deg
+        row["static_toe_deg"] = values.static_toe_deg
         row["camber_slope_deg_per_in"] = values.camber_slope_deg_per_in
         row["bump_camber_increase_deg"] = values.bump_camber_increase_deg
         row["bump_camber_max_deg"] = values.bump_camber_max_deg
