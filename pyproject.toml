@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mg"
 dynamic = ["version"]
-dependencies = ["colorama", "matplotlib", "numpy", "pandas", "scipy"]
+dependencies = ["colorama", "matplotlib", "numpy", "pandas", "scipy", "tqdm"]
 authors = [{ name = "Bradley Davis", email = "me@bradleydavis.tech" }]
 requires-python = ">=3.12"
 

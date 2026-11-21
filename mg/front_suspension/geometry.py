@@ -532,6 +532,22 @@ class Solver:
         Returns:
             The solved suspension state.
 
+        """
+        return cls.solve(fixed, bump).suspension_state
+
+    @classmethod
+    def solve(
+        cls,
+        fixed: GeometryFixed,
+        bump: float,
+        *,
+        initial: Solver | None = None,
+    ) -> Solver:
+        """Solve for a wheel contact height, optionally using a previous solution.
+
+        Returns:
+            The solver at the requested suspension state.
+
         Raises:
             ValueError: If no state satisfies the constraints.
 
@@ -546,15 +562,27 @@ class Solver:
             return [g.arm_tie_rod_derived - fixed.arm_tie_rod, g.wheel_contact_z - bump]
 
         limits = np.deg2rad([20, 30])
-        result = least_squares(residual, [0.0, 0.0], bounds=(-limits, limits))
-        if not result.success or np.max(np.abs(result.fun)) >= DEFAULT_TOL:
-            msg = f"No suspension state found for wheel contact height {bump}"
-            raise ValueError(msg)
-        return cls(
-            fixed,
-            _arm_lower_elevation=Angle(result.x[0]),
-            _swivel=Angle(result.x[1]),
-        ).suspension_state
+        guesses = [[0.0, 0.0]]
+        if initial is not None:
+            guess = [
+                initial._arm_lower_elevation,  # ruff: ignore[private-member-access]
+                initial._swivel,  # ruff: ignore[private-member-access]
+            ]
+
+            guesses.insert(0, [float(v) for v in guess])
+        for guess in guesses:
+            try:
+                result = least_squares(residual, guess, bounds=(-limits, limits))
+            except ValueError:
+                continue
+            if result.success and np.max(np.abs(result.fun)) < DEFAULT_TOL:
+                return cls(
+                    fixed,
+                    _arm_lower_elevation=Angle(result.x[0]),
+                    _swivel=Angle(result.x[1]),
+                )
+        msg = f"No suspension state found for wheel contact height {bump}"
+        raise ValueError(msg)
 
     @cached_property
     def suspension_state(self) -> SuspensionState:
