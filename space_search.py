@@ -171,7 +171,7 @@ def evaluate(combination: tuple[float, ...]) -> SearchRow:
 
 def main() -> None:
     """Evaluate every combination of suspension dimensions."""
-    n = 7
+    n = 15
     spaces = {
         "arm_tie_rod": np.linspace(7.5, 8.5, n),
         "arm_lower": np.linspace(9, 12, n),
@@ -190,7 +190,7 @@ def main() -> None:
         Path("space_search.csv").open("w", encoding="utf-8", newline="") as output,
         Pool(processes=max(1, (os.cpu_count() or 0) - 2)) as pool,
     ):
-        writer = csv.DictWriter(output, fieldnames=columns)
+        writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\n")
         writer.writeheader()
         results = pool.imap(evaluate, combinations, chunksize=16)
         for row in tqdm(results, total=prod(map(len, spaces.values()))):

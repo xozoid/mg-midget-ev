@@ -66,14 +66,23 @@ class TestSuspensionTargets(unittest.TestCase):
 
         self.assertAlmostEqual(world.roll_center.z, state.roll_center.z - 1.0)
 
-    def test_roll_center_migration_is_a_hard_constraint(self) -> None:
+    def test_roll_center_migration_is_a_soft_constraint(self) -> None:
         sweep = SuspensionSweep(GeometryFixed())
 
         result = sweep.target_tests
 
         self.assertGreater(sweep.target_values.roll_center_pp_in, 2.0)
         self.assertFalse(result.roll_center)
-        self.assertFalse(result.hard_constraints_passed)
+        self.assertTrue(
+            replace(
+                result,
+                static_camber=True,
+                bump_camber=True,
+                droop_camber=True,
+                bump_steer=True,
+                wheel_center=True,
+            ).hard_constraints_passed,
+        )
 
     def test_parallel_arms_have_a_finite_roll_center(self) -> None:
         state = replace(

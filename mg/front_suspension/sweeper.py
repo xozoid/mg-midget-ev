@@ -70,7 +70,6 @@ class SuspensionTargetTests:
                 self.droop_camber,
                 self.bump_steer,
                 self.wheel_center,
-                self.roll_center,
             ),
         )
 
@@ -281,7 +280,7 @@ class SuspensionSweep:
         )
         line(
             tests.roll_center,
-            "Roll center peak-to-peak",
+            "Roll center peak-to-peak (soft)",
             f"{values.roll_center_pp_in:6.3f} in",
             f"<= {ROLL_CENTER_PP:.3f} in",
         )
