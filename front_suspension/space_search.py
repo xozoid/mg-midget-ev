@@ -15,9 +15,9 @@ from typing import NamedTuple, NotRequired, TypedDict
 import numpy as np
 from tqdm import tqdm
 
-from mg.front_suspension.constraints import BUMP, STEERING
-from mg.front_suspension.geometry import GeometryFixed, Solver, SuspensionState
-from mg.front_suspension.sweeper import SuspensionSweep, SuspensionTargetValues
+from front_suspension.helpers.constraints import BUMP, STEERING
+from front_suspension.helpers.geometry import GeometryFixed, Solver, SuspensionState
+from front_suspension.helpers.sweeper import SuspensionSweep, SuspensionTargetValues
 
 SearchRow = TypedDict(
     "SearchRow",

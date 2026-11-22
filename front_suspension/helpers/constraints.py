@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mg.front_suspension.utils import Angle
+from front_suspension.helpers.utils import Angle
 
 BUMP = (-2, 2.5)
 STEERING = (-2, 2)

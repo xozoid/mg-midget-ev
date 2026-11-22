@@ -14,9 +14,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 
-from mg.front_suspension.constraints import BUMP
-from mg.front_suspension.plot_utils import PlotUtils
-from mg.front_suspension.utils import Angle, DEFAULT_TOL, HALF_PI, Point
+from front_suspension.helpers.constraints import BUMP
+from front_suspension.helpers.plot_utils import PlotUtils
+from front_suspension.helpers.utils import Angle, DEFAULT_TOL, HALF_PI, Point
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -7,7 +7,7 @@ from typing import Any, cast, TYPE_CHECKING
 
 import numpy as np
 
-from mg.front_suspension.utils import Point
+from front_suspension.helpers.utils import Point
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes

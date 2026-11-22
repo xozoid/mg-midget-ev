@@ -97,4 +97,4 @@ strictly-empty-init-modules = true
 version_file = "mg/version.py"
 
 [tool.setuptools.packages.find]
-include = ["mg*"]
+include = ["mg*", "front_suspension*"]

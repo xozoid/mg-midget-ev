@@ -6,8 +6,8 @@ from dataclasses import replace
 
 import matplotlib.pyplot as plt
 
-from mg.front_suspension.geometry import GeometryFixed, Solver
-from mg.front_suspension.utils import Point
+from front_suspension.helpers.geometry import GeometryFixed, Solver
+from front_suspension.helpers.utils import Point
 
 
 class TestInstantCenter(unittest.TestCase):

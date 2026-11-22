@@ -8,9 +8,9 @@ from io import StringIO
 
 from colorama import Fore, Style
 
-from mg.front_suspension.geometry import GeometryFixed, Solver
-from mg.front_suspension.sweeper import SuspensionSweep
-from mg.front_suspension.utils import Point
+from front_suspension.helpers.geometry import GeometryFixed, Solver
+from front_suspension.helpers.sweeper import SuspensionSweep
+from front_suspension.helpers.utils import Point
 
 
 class TestSuspensionTargets(unittest.TestCase):

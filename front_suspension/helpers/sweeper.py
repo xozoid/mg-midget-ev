@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from colorama import Fore, Style
 
-from mg.front_suspension.constraints import (
+from front_suspension.helpers.constraints import (
     BUMP,
     BUMP_CAMBER_MAX,
     BUMP_STEER_PP,
@@ -23,12 +23,12 @@ from mg.front_suspension.constraints import (
     STEERING,
     WHEEL_CENTER_X,
 )
-from mg.front_suspension.geometry import GeometryFixed, Solver
+from front_suspension.helpers.geometry import GeometryFixed, Solver
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from mg.front_suspension.geometry import SuspensionState
+    from front_suspension.helpers.geometry import SuspensionState
 
 
 N = 31
