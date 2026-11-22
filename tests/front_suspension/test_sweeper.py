@@ -16,6 +16,15 @@ from mg.front_suspension.utils import Point
 class TestSuspensionTargets(unittest.TestCase):
     """Check target evaluation using the suspension solver."""
 
+    def test_wheel_center_target_uses_wheel_center(self) -> None:
+        sweep = SuspensionSweep(GeometryFixed(), bump_range=[-2.0, 0.0, 2.5])
+        sweep.__dict__["wheel_center_x"] = [24.0, 25.0, 26.0]
+        sweep.__dict__["lateral_scrub"] = [21.0, 22.0, 23.0]
+
+        measured = sweep.target_values.wheel_center_x_in
+
+        self.assertEqual(measured, 25.0)
+
     def test_report_prints_measured_targets_with_status_colors(self) -> None:
         sweep = SuspensionSweep(GeometryFixed())
         output = StringIO()

@@ -121,6 +121,11 @@ class SuspensionSweep:
         return [s.wheel_contact.x for s in self.bump]
 
     @cached_property
+    def wheel_center_x(self) -> list[float]:
+        """Wheel-center lateral positions in inches over wheel travel."""
+        return [s.wheel_center.x for s in self.bump]
+
+    @cached_property
     def roll_center(self) -> list[float]:
         """Roll-center heights above ground in inches over wheel travel."""
         return [s.roll_center.z - s.wheel_contact.z for s in self.bump]
@@ -144,7 +149,7 @@ class SuspensionSweep:
             raise ValueError(msg)
         camber_deg = np.asarray(self.camber)[order]
         toe_deg = np.asarray(self.bump_steer)[order]
-        center_x_in = np.asarray(self.lateral_scrub)[order]
+        center_x_in = np.asarray(self.wheel_center_x)[order]
         roll_center_in = np.asarray(self.roll_center)[order]
 
         # NOTE: Interpolated endpoints keep extra travel outside the target range
@@ -414,14 +419,8 @@ class SuspensionSweep:
             label="Bump steer peak-to-peak limit",
         )
 
-        axes[1, 0].plot(
-            [0, 0],
-            WHEEL_CENTER_X,
-            color="tab:green",
-            linewidth=4,
-            label="Static wheel center target",
-        )
-        for ax in (camber_ax, toe_ax, axes[1, 0]):
+        axes[1, 0].axvline(0, color="0.5", linestyle=":", linewidth=0.8)
+        for ax in (camber_ax, toe_ax):
             ax.axvline(0, color="0.5", linestyle=":", linewidth=0.8)
             ax.legend(fontsize="small")
 

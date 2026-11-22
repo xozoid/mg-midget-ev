@@ -181,6 +181,28 @@ def main() -> None:
             up_x=14.265356597282258,
             up_z=15.765960687615198,
         ),
+        # Stock wheel-side tie-rod pivot.
+        GeometryFixed(
+            arm_tie_rod=8.063947742179588,
+            arm_lower=10.995632371322383,
+            arm_upper=6.672190658027075,
+            up_x=14.133604466967453,
+            up_z=15.600973967812775,
+        ),
+        GeometryFixed(
+            arm_tie_rod=8.007681659754493,
+            arm_lower=10.926098409028217,
+            arm_upper=6.793729038294137,
+            up_x=13.962679690118371,
+            up_z=15.584082272568212,
+        ),
+        GeometryFixed(
+            arm_tie_rod=7.988678191853884,
+            arm_lower=10.932908831218404,
+            arm_upper=7.000954253783322,
+            up_x=13.72354605580215,
+            up_z=15.579619701367768,
+        ),
     ]
     output = Path("out")
     output.mkdir(parents=True, exist_ok=True)
