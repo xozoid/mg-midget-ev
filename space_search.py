@@ -23,6 +23,9 @@ SearchRow = TypedDict(
     "SearchRow",
     {
         "arm_tie_rod": float,
+        "tie_rod_wx": float,
+        "tie_rod_wy": float,
+        "tie_rod_wz": float,
         "arm_lower": float,
         "arm_upper": float,
         "up_x": float,
@@ -53,6 +56,11 @@ class SearchSweep(SuspensionSweep):
     """Sweep outward from rest using the previous solution as an initial guess."""
 
     @cached_property
+    def rest(self) -> Solver:
+        """Solve the centered rest state for reuse across the sweep."""
+        return Solver.solve(replace(self.geometry, steering=0), 0)
+
+    @cached_property
     def states(self) -> SearchStates:
         """Solve both ranges, sharing the centered rest state.
 
@@ -69,7 +77,7 @@ class SearchSweep(SuspensionSweep):
             )
             if value != 0
         }
-        rest = Solver.solve(centered, 0)
+        rest = self.rest
 
         def sample(values: list[float], *, steering: bool) -> list[SuspensionState]:
             """Solve each side from rest, then restore the requested order.
@@ -116,9 +124,21 @@ def evaluate(combination: tuple[float, ...]) -> SearchRow:
         Input dimensions, solvability, target measurements, and pass status.
 
     """
-    arm_tie_rod, arm_lower, arm_upper, up_x, up_z = combination
+    (
+        arm_tie_rod,
+        tie_rod_wx,
+        tie_rod_wy,
+        tie_rod_wz,
+        arm_lower,
+        arm_upper,
+        up_x,
+        up_z,
+    ) = combination
     fixed = GeometryFixed(
         arm_tie_rod=arm_tie_rod,
+        tie_rod_wx=tie_rod_wx,
+        tie_rod_wy=tie_rod_wy,
+        tie_rod_wz=tie_rod_wz,
         arm_lower=arm_lower,
         arm_upper=arm_upper,
         up_x=up_x,
@@ -126,6 +146,9 @@ def evaluate(combination: tuple[float, ...]) -> SearchRow:
     )
     row: SearchRow = {
         "arm_tie_rod": arm_tie_rod,
+        "tie_rod_wx": tie_rod_wx,
+        "tie_rod_wy": tie_rod_wy,
+        "tie_rod_wz": tie_rod_wz,
         "arm_lower": arm_lower,
         "arm_upper": arm_upper,
         "up_x": up_x,
@@ -133,24 +156,29 @@ def evaluate(combination: tuple[float, ...]) -> SearchRow:
         "solvable": False,
         "pass": False,
     }
+    sweep = SearchSweep(
+        fixed,
+        bump_range=[
+            BUMP[0],
+            BUMP[0] * 0.01,
+            0,
+            BUMP[1] * 0.01,
+            BUMP[1],
+        ],
+        steering_range=[
+            STEERING[0],
+            STEERING[0] * 0.01,
+            0,
+            STEERING[1] * 0.01,
+            STEERING[1],
+        ],
+    )
     try:
-        sweep = SearchSweep(
-            fixed,
-            bump_range=[
-                BUMP[0],
-                BUMP[0] * 0.01,
-                0,
-                BUMP[1] * 0.01,
-                BUMP[1],
-            ],
-            steering_range=[
-                STEERING[0],
-                STEERING[0] * 0.01,
-                0,
-                STEERING[1] * 0.01,
-                STEERING[1],
-            ],
-        )
+        static_toe_deg = sweep.rest.suspension_state.toe.deg
+    except ValueError:
+        return row
+    row["static_toe_deg"] = static_toe_deg
+    try:
         _ = sweep.steering
         values = sweep.target_values
     except ValueError:
@@ -173,9 +201,12 @@ def evaluate(combination: tuple[float, ...]) -> SearchRow:
 
 def main() -> None:
     """Evaluate every combination of suspension dimensions."""
-    n = 15
+    n = 4
     spaces = {
-        "arm_tie_rod": np.linspace(7.5, 8.5, n),
+        "arm_tie_rod": np.linspace(5.5, 8.5, n),
+        "tie_rod_wx": np.linspace(-4.125, -2.125, n),
+        "tie_rod_wy": np.linspace(4, 6, n),
+        "tie_rod_wz": np.linspace(1, 2, n),
         "arm_lower": np.linspace(9, 12, n),
         "arm_upper": np.linspace(5, 9, n),
         "up_x": np.linspace(11, 15, n),
@@ -189,7 +220,11 @@ def main() -> None:
     n_passing = 0
 
     with (
-        Path("space_search.csv").open("w", encoding="utf-8", newline="") as output,
+        Path("space_search_wheel_pivot_xyz.csv").open(
+            "w",
+            encoding="utf-8",
+            newline="",
+        ) as output,
         Pool(processes=max(1, (os.cpu_count() or 0) - 2)) as pool,
     ):
         writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\n")
